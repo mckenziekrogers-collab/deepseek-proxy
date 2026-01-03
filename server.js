@@ -10,11 +10,8 @@ app.use(express.json());
 
 // ---------- CONFIG ----------
 const API_KEY = process.env.NIM_API_KEY;
-
-// Use a guaranteed-working model
 const MODEL = process.env.NIM_MODEL || "deepseek-ai/deepseek-v3";
-
-// Disable streaming by default (Render-safe)
+// Streaming is disabled by default (Render-safe)
 const ENABLE_STREAMING = false;
 // ----------------------------
 
@@ -22,10 +19,12 @@ if (!API_KEY) {
   console.warn("⚠️  WARNING: NIM_API_KEY is NOT set!");
 }
 
+// ---------- HEALTH ----------
 app.get("/health", (req, res) => {
   res.json({ status: "ok", model: MODEL });
 });
 
+// ---------- LIST MODELS ----------
 app.get("/v1/models", (req, res) => {
   res.json({
     object: "list",
@@ -35,6 +34,7 @@ app.get("/v1/models", (req, res) => {
   });
 });
 
+// ---------- CHAT COMPLETIONS ----------
 app.post("/v1/chat/completions", async (req, res) => {
   console.log("REQUEST RECEIVED");
 
