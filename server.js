@@ -11,10 +11,7 @@ app.use(express.json());
 // ---------- CONFIG ----------
 const API_KEY = process.env.NIM_API_KEY;
 const MODEL = process.env.NIM_MODEL || "deepseek-ai/deepseek-v3";
-const ENABLE_STREAMING = false;
-
-// Context memory settings
-const MAX_RECENT_MESSAGES = 100; // Keep only last 100 messages in full context
+const MAX_RECENT_MESSAGES = 100; // Only keep last 100 messages for speed
 const sessions = {}; // In-memory session memory
 // ----------------------------
 
@@ -39,81 +36,55 @@ app.post("/v1/chat/completions", async (req, res) => {
 
     if (!API_KEY) return res.status(500).json({ error: "Missing NIM_API_KEY" });
 
-    // Initialize session memory if new
-    if (!sessions[sessionId]) {
-      sessions[sessionId] = {
-        summary: "",
-        messages: [],
-      };
-    }
-
+    // Initialize session if needed
+    if (!sessions[sessionId]) sessions[sessionId] = { summary: "", messages: [] };
     const session = sessions[sessionId];
 
-    // Merge old summary + recent messages
+    // Combine previous summary + recent messages
     const recentMessages = session.messages.slice(-MAX_RECENT_MESSAGES);
-    const combinedContext = [];
+    const context = [];
 
-    // Add system summary if exists
     if (session.summary) {
-      combinedContext.push({
+      context.push({
         role: "system",
-        content: `Memory Summary of previous conversation: ${session.summary}`,
+        content: `Summary of previous conversation: ${session.summary}`,
       });
     }
 
-    // Add recent messages
-    combinedContext.push(...recentMessages);
+    context.push(...recentMessages, ...messages);
 
-    // Add new incoming messages
-    combinedContext.push(...messages);
-
-    // Send to NVIDIA API
+    // Call NVIDIA DeepSeek API
     const response = await axios.post(
       "https://integrate.api.nvidia.com/v1/chat/completions",
       {
         model: MODEL,
-        messages: combinedContext,
+        messages: context,
         temperature: req.body?.temperature ?? 0.7,
         max_tokens: req.body?.max_tokens ?? 2048,
-        stream: ENABLE_STREAMING && req.body?.stream === true,
+        stream: false, // streaming disabled for Render
       },
       {
         headers: {
           Authorization: `Bearer ${API_KEY}`,
           "Content-Type": "application/json",
         },
-        responseType: ENABLE_STREAMING ? "stream" : "json",
+        responseType: "json",
         timeout: 120000,
       }
     );
 
-    // Handle streaming (optional)
-    if (ENABLE_STREAMING && req.body?.stream === true) {
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-      response.data.pipe(res);
-      return;
-    }
-
-    // Get assistant reply
     const reply = response.data?.choices?.[0]?.message?.content ?? "";
 
-    // Save to session memory
-    session.messages.push(...messages); // incoming
-    session.messages.push({ role: "assistant", content: reply }); // reply
+    // Save messages to session memory
+    session.messages.push(...messages, { role: "assistant", content: reply });
 
-    // Update session summary every 50 messages
+    // Summarize old messages if memory too big
     if (session.messages.length > 50) {
-      // Summarize older messages to compress memory
-      const summaryContent = session.messages
+      const oldMessages = session.messages
         .slice(0, session.messages.length - MAX_RECENT_MESSAGES)
         .map((m) => `${m.role}: ${m.content}`)
         .join("\n");
-
-      // Here we could call the model to summarize, but for speed:
-      session.summary = summaryContent; 
-      // Remove old messages to keep memory small
+      session.summary = oldMessages; // could be improved with real summarization
       session.messages = session.messages.slice(-MAX_RECENT_MESSAGES);
     }
 
@@ -123,28 +94,18 @@ app.post("/v1/chat/completions", async (req, res) => {
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
       model: MODEL,
-      choices: [
-        {
-          index: 0,
-          message: { role: "assistant", content: reply },
-          finish_reason: "stop",
-        },
-      ],
-      usage: response.data?.usage || {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0,
-      },
+      choices: [{ index: 0, message: { role: "assistant", content: reply }, finish_reason: "stop" }],
+      usage: response.data?.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     });
   } catch (error) {
-    console.error("❌ ERROR MESSAGE:", error.message);
-    console.error("❌ ERROR DATA:", error.response?.data);
-    console.error("❌ STATUS:", error.response?.status);
-
-    res.status(error.response?.status || 500).json({
-      error: error.response?.data || { message: error.message },
-    });
+    console.error("❌ ERROR:", error.response?.data || error.message);
+    res.status(error.response?.status || 500).json({ error: error.response?.data || { message: error.message } });
   }
+});
+
+// Optional GET route to prevent browser 404
+app.get("/v1/chat/completions", (req, res) => {
+  res.send("POST requests only for chat completions. Use Janitor AI or POST tools.");
 });
 
 app.listen(PORT, () => {
