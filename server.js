@@ -250,11 +250,7 @@ app.post(
     "/v1/chat/completions",
     "/v1/chat/completions/",
     "/chat/completions",
-    "/chat/completions/",
-    "/v1",
-    "/v1/",
-    "/",
-    "",
+    
   ],
   handleChat
 );
