@@ -1,4 +1,4 @@
-// server.js - OpenAI to NVIDIA NIM Proxy (DeepSeek V3.1 with Long Chat Support)
+// server.js - OpenAI to NVIDIA NIM Proxy (DeepSeek V3.1)
 const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
@@ -8,15 +8,12 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
-app.use(express.json({ limit: "20mb" })); // Increased for long chats
+app.use(express.json({ limit: "20mb" }));
 
 // NVIDIA NIM API configuration
 const NIM_API_BASE = "https://integrate.api.nvidia.com/v1";
 const API_KEY = process.env.NIM_API_KEY;
 const MODEL = process.env.NIM_MODEL || "deepseek-ai/deepseek-v3.1";
-
-// 🔥 REASONING DISPLAY TOGGLE
-const SHOW_REASONING = false; // Set to true to show reasoning with <think> tags
 
 // Request tracking
 let lastHit = null;
@@ -25,14 +22,15 @@ function recordHit(req) {
     time: new Date().toISOString(),
     method: req.method,
     path: req.path,
+    url: req.url,
   };
-  console.log("HIT:", lastHit);
+  console.log("🔵 HIT:", lastHit);
 }
 
 // Root endpoint
 app.get("/", (req, res) => {
   recordHit(req);
-  res.type("text").send("Proxy up. Try /health, /whoami, /upstream/models");
+  res.type("text").send("✅ Proxy running! Try /health or POST to /v1/chat/completions");
 });
 
 // Health check endpoint
@@ -40,10 +38,9 @@ app.get("/health", (req, res) => {
   recordHit(req);
   res.json({ 
     status: "ok", 
-    service: "OpenAI to NVIDIA NIM Proxy (DeepSeek V3.1)",
+    service: "OpenAI to NVIDIA NIM Proxy",
     model: MODEL,
-    hasNimKey: !!API_KEY,
-    reasoning_display: SHOW_REASONING
+    hasNimKey: !!API_KEY
   });
 });
 
@@ -53,12 +50,11 @@ app.get("/whoami", (req, res) => {
   res.json({ 
     lastHit, 
     model: MODEL, 
-    hasNimKey: !!API_KEY,
-    reasoning_display: SHOW_REASONING
+    hasNimKey: !!API_KEY
   });
 });
 
-// Upstream models endpoint - shows actual NVIDIA models
+// Upstream models endpoint
 app.get("/upstream/models", async (req, res) => {
   recordHit(req);
   try {
@@ -75,32 +71,24 @@ app.get("/upstream/models", async (req, res) => {
   }
 });
 
-// OpenAI-style model list for clients
+// OpenAI-style model list
 app.get("/v1/models", (req, res) => {
   recordHit(req);
   res.json({
     object: "list",
     data: [
-      { id: "gpt-4", object: "model", created: Date.now(), owned_by: "nvidia-deepseek-proxy" },
-      { id: "gpt-4o", object: "model", created: Date.now(), owned_by: "nvidia-deepseek-proxy" },
-      { id: "gpt-3.5-turbo", object: "model", created: Date.now(), owned_by: "nvidia-deepseek-proxy" },
-      { id: MODEL, object: "model", created: Date.now(), owned_by: "nvidia-deepseek-proxy" }
+      { id: "gpt-4", object: "model", created: Date.now(), owned_by: "proxy" },
+      { id: "gpt-4o", object: "model", created: Date.now(), owned_by: "proxy" },
+      { id: MODEL, object: "model", created: Date.now(), owned_by: "proxy" }
     ],
   });
 });
 
-// Friendly GET message for browser visits
-app.get(
-  ["/v1/chat/completions", "/v1/chat/completions/", "/chat/completions", "/chat/completions/", "/v1", "/v1/"],
-  (req, res) => {
-    recordHit(req);
-    res.status(200).type("text").send("Use POST with JSON body { messages: [...] }");
-  }
-);
-
 // Main chat completion handler
-async function handleChat(req, res) {
+app.post("/v1/chat/completions", async (req, res) => {
   recordHit(req);
+  console.log("📨 POST /v1/chat/completions - Body:", JSON.stringify(req.body).substring(0, 200));
+  
   try {
     if (!API_KEY) {
       return res.status(500).json({ error: { message: "Missing NIM_API_KEY" } });
@@ -109,17 +97,16 @@ async function handleChat(req, res) {
     const body = req.body || {};
     const messages = Array.isArray(body.messages) ? body.messages : [];
     const temperature = body.temperature ?? 0.7;
-    const max_tokens = body.max_tokens ?? 8192; // Increased for long chats
-    const stream = body.stream || false;
+    const max_tokens = body.max_tokens ?? 8192;
 
-    console.log(`Processing ${messages.length} messages - Routing to: ${MODEL}`);
+    console.log(`✅ Routing ${messages.length} messages to: ${MODEL}`);
 
     const nimRequest = {
       model: MODEL,
       messages: messages,
       temperature: temperature,
       max_tokens: max_tokens,
-      stream: stream
+      stream: false
     };
 
     const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
@@ -127,149 +114,91 @@ async function handleChat(req, res) {
         Authorization: `Bearer ${API_KEY}`, 
         "Content-Type": "application/json" 
       },
-      timeout: 120000,
-      responseType: stream ? 'stream' : 'json'
+      timeout: 120000
     });
 
-    if (stream) {
-      // Handle streaming response with reasoning
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      
-      let buffer = '';
-      let reasoningStarted = false;
-      
-      response.data.on('data', (chunk) => {
-        buffer += chunk.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        
-        lines.forEach(line => {
-          if (line.startsWith('data: ')) {
-            if (line.includes('[DONE]')) {
-              res.write(line + '\n\n');
-              return;
-            }
-            
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.choices?.[0]?.delta) {
-                const reasoning = data.choices[0].delta.reasoning_content;
-                const content = data.choices[0].delta.content;
-                
-                if (SHOW_REASONING) {
-                  let combinedContent = '';
-                  
-                  if (reasoning && !reasoningStarted) {
-                    combinedContent = '<think>\n' + reasoning;
-                    reasoningStarted = true;
-                  } else if (reasoning) {
-                    combinedContent = reasoning;
-                  }
-                  
-                  if (content && reasoningStarted) {
-                    combinedContent += '\n</think>\n\n' + content;
-                    reasoningStarted = false;
-                  } else if (content) {
-                    combinedContent += content;
-                  }
-                  
-                  if (combinedContent) {
-                    data.choices[0].delta.content = combinedContent;
-                    delete data.choices[0].delta.reasoning_content;
-                  }
-                } else {
-                  if (content) {
-                    data.choices[0].delta.content = content;
-                  } else {
-                    data.choices[0].delta.content = '';
-                  }
-                  delete data.choices[0].delta.reasoning_content;
-                }
-              }
-              res.write(`data: ${JSON.stringify(data)}\n\n`);
-            } catch (e) {
-              res.write(line + '\n');
-            }
-          }
-        });
-      });
-      
-      response.data.on('end', () => res.end());
-      response.data.on('error', (err) => {
-        console.error('Stream error:', err);
-        res.end();
-      });
-    } else {
-      // Non-streaming response with reasoning
-      let fullContent = response.data?.choices?.[0]?.message?.content || "";
-      
-      if (SHOW_REASONING && response.data?.choices?.[0]?.message?.reasoning_content) {
-        fullContent = '<think>\n' + response.data.choices[0].message.reasoning_content + '\n</think>\n\n' + fullContent;
-      }
+    const reply = response.data?.choices?.[0]?.message?.content || "";
 
-      res.json({
-        id: `chatcmpl-${Date.now()}`,
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        model: body.model || MODEL,
-        choices: [
-          { 
-            index: 0, 
-            message: { 
-              role: "assistant", 
-              content: fullContent 
-            }, 
-            finish_reason: response.data?.choices?.[0]?.finish_reason || "stop" 
-          }
-        ],
-        usage: response.data?.usage || { 
-          prompt_tokens: 0, 
-          completion_tokens: 0, 
-          total_tokens: 0 
-        },
-      });
-    }
+    res.json({
+      id: `chatcmpl-${Date.now()}`,
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model: body.model || MODEL,
+      choices: [
+        { 
+          index: 0, 
+          message: { 
+            role: "assistant", 
+            content: reply 
+          }, 
+          finish_reason: response.data?.choices?.[0]?.finish_reason || "stop" 
+        }
+      ],
+      usage: response.data?.usage || { 
+        prompt_tokens: 0, 
+        completion_tokens: 0, 
+        total_tokens: 0 
+      }
+    });
+
+    console.log("✅ Response sent successfully");
+
   } catch (error) {
-    console.error("NVIDIA ERROR STATUS:", error.response?.status);
-    console.error("NVIDIA ERROR DATA:", error.response?.data || error.message);
+    console.error("❌ ERROR:", error.message);
+    console.error("❌ NVIDIA STATUS:", error.response?.status);
+    console.error("❌ NVIDIA DATA:", JSON.stringify(error.response?.data));
     
     res.status(error.response?.status || 500).json({
       error: error.response?.data || { 
         message: error.message,
         type: 'invalid_request_error'
-      },
+      }
     });
   }
-}
+});
 
-// Bulletproof POST routes (covers Janitor oddities + long chats)
-app.post(
-  [
-    "/v1/chat/completions",
-    "/v1/chat/completions/",
-    "/chat/completions",
-    
-  ],
-  handleChat
-);
+// Alternative routes for compatibility
+app.post("/v1/chat/completions/", (req, res, next) => {
+  req.url = "/v1/chat/completions";
+  app.handle(req, res, next);
+});
 
-// Catch-all 404 so we can see what's being hit
+app.post("/chat/completions", (req, res, next) => {
+  req.url = "/v1/chat/completions";
+  app.handle(req, res, next);
+});
+
+app.post("/", async (req, res) => {
+  recordHit(req);
+  // Check if it's a chat request
+  if (req.body && req.body.messages) {
+    req.url = "/v1/chat/completions";
+    return app.handle(req, res);
+  }
+  res.type("text").send("✅ POST received! For chat, use /v1/chat/completions");
+});
+
+// Catch-all 404
 app.use((req, res) => {
   recordHit(req);
+  console.log("❌ 404 - Route not found:", req.method, req.path);
   res.status(404).json({ 
     error: { 
       message: "Route not found", 
       method: req.method, 
-      path: req.path 
+      path: req.path,
+      url: req.url
     } 
   });
 });
 
 app.listen(PORT, () => {
-  console.log(`OpenAI to NVIDIA NIM Proxy running on port ${PORT}`);
-  console.log(`Model: ${MODEL}`);
-  console.log(`Reasoning display: ${SHOW_REASONING ? 'ENABLED' : 'DISABLED'}`);
-  console.log(`Max JSON size: 20mb (supports long chats)`);
+  console.log("=".repeat(50));
+  console.log("🚀 OpenAI to NVIDIA NIM Proxy");
+  console.log("=".repeat(50));
+  console.log(`📡 Port: ${PORT}`);
+  console.log(`🤖 Model: ${MODEL}`);
+  console.log(`🔑 API Key: ${API_KEY ? "✅ Loaded" : "❌ Missing"}`);
+  console.log(`🌐 Health: http://localhost:${PORT}/health`);
+  console.log("=".repeat(50));
 });
