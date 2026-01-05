@@ -71,6 +71,16 @@ app.get("/upstream/models", async (req, res) => {
   }
 });
 
+// v1 base route
+app.get("/v1", (req, res) => {
+  recordHit(req);
+  res.json({ 
+    status: "ok",
+    message: "OpenAI-compatible API v1",
+    endpoints: ["/v1/models", "/v1/chat/completions"]
+  });
+});
+
 // OpenAI-style model list
 app.get("/v1/models", (req, res) => {
   recordHit(req);
@@ -97,7 +107,8 @@ app.post("/v1/chat/completions", async (req, res) => {
     const body = req.body || {};
     const messages = Array.isArray(body.messages) ? body.messages : [];
     const temperature = body.temperature ?? 0.7;
-    const max_tokens = body.max_tokens ?? 8192;
+    // Ensure minimum 150 tokens, override if Janitor sends too low
+    const max_tokens = Math.max(body.max_tokens ?? 8192, 150);
 
     console.log(`✅ Routing ${messages.length} messages to: ${MODEL}`);
 
