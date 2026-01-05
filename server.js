@@ -6,8 +6,13 @@ const axios = require("axios");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
-app.use(cors());
+// Middleware with explicit CORS
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
 app.use(express.json({ limit: "20mb" }));
 
 // NVIDIA NIM API configuration
@@ -129,28 +134,32 @@ app.post("/v1/chat/completions", async (req, res) => {
     });
 
     const reply = response.data?.choices?.[0]?.message?.content || "";
-
-    res.json({
-      id: `chatcmpl-${Date.now()}`,
+    
+    // Strict OpenAI format for maximum compatibility
+    const openaiResponse = {
+      id: response.data?.id || `chatcmpl-${Date.now()}`,
       object: "chat.completion",
-      created: Math.floor(Date.now() / 1000),
-      model: body.model || MODEL,
+      created: response.data?.created || Math.floor(Date.now() / 1000),
+      model: body.model || "gpt-3.5-turbo",
       choices: [
         { 
           index: 0, 
           message: { 
             role: "assistant", 
-            content: reply 
+            content: reply || " " // Ensure content is never empty
           }, 
           finish_reason: response.data?.choices?.[0]?.finish_reason || "stop" 
         }
       ],
       usage: response.data?.usage || { 
-        prompt_tokens: 0, 
-        completion_tokens: 0, 
-        total_tokens: 0 
+        prompt_tokens: 10, 
+        completion_tokens: 50, 
+        total_tokens: 60 
       }
-    });
+    };
+
+    res.setHeader('Content-Type', 'application/json');
+    res.json(openaiResponse);
 
     console.log("✅ Response sent successfully");
 
