@@ -112,17 +112,17 @@ app.post("/v1/chat/completions", async (req, res) => {
     const body = req.body || {};
     const messages = Array.isArray(body.messages) ? body.messages : [];
     const temperature = body.temperature ?? 0.7;
-    // Ensure minimum 150 tokens, override if Janitor sends too low
     const max_tokens = Math.max(body.max_tokens ?? 8192, 150);
+    const stream = body.stream || false;
 
-    console.log(`✅ Routing ${messages.length} messages to: ${MODEL}`);
+    console.log(`✅ Routing ${messages.length} messages to: ${MODEL} (stream: ${stream})`);
 
     const nimRequest = {
       model: MODEL,
       messages: messages,
       temperature: temperature,
       max_tokens: max_tokens,
-      stream: false
+      stream: stream
     };
 
     const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
@@ -130,38 +130,56 @@ app.post("/v1/chat/completions", async (req, res) => {
         Authorization: `Bearer ${API_KEY}`, 
         "Content-Type": "application/json" 
       },
-      timeout: 120000
+      timeout: 120000,
+      responseType: stream ? 'stream' : 'json'
     });
 
-    const reply = response.data?.choices?.[0]?.message?.content || "";
-    
-    // Strict OpenAI format for maximum compatibility
-    const openaiResponse = {
-      id: response.data?.id || `chatcmpl-${Date.now()}`,
-      object: "chat.completion",
-      created: response.data?.created || Math.floor(Date.now() / 1000),
-      model: body.model || "gpt-3.5-turbo",
-      choices: [
-        { 
-          index: 0, 
-          message: { 
-            role: "assistant", 
-            content: reply || " " // Ensure content is never empty
-          }, 
-          finish_reason: response.data?.choices?.[0]?.finish_reason || "stop" 
+    if (stream) {
+      // Handle streaming response
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      
+      response.data.pipe(res);
+      
+      response.data.on('end', () => {
+        console.log("✅ Stream completed");
+      });
+      
+      response.data.on('error', (err) => {
+        console.error('❌ Stream error:', err);
+        res.end();
+      });
+    } else {
+      // Non-streaming response
+      const reply = response.data?.choices?.[0]?.message?.content || "";
+      
+      const openaiResponse = {
+        id: response.data?.id || `chatcmpl-${Date.now()}`,
+        object: "chat.completion",
+        created: response.data?.created || Math.floor(Date.now() / 1000),
+        model: body.model || "gpt-3.5-turbo",
+        choices: [
+          { 
+            index: 0, 
+            message: { 
+              role: "assistant", 
+              content: reply || " "
+            }, 
+            finish_reason: response.data?.choices?.[0]?.finish_reason || "stop" 
+          }
+        ],
+        usage: response.data?.usage || { 
+          prompt_tokens: 10, 
+          completion_tokens: 50, 
+          total_tokens: 60 
         }
-      ],
-      usage: response.data?.usage || { 
-        prompt_tokens: 10, 
-        completion_tokens: 50, 
-        total_tokens: 60 
-      }
-    };
+      };
 
-    res.setHeader('Content-Type', 'application/json');
-    res.json(openaiResponse);
-
-    console.log("✅ Response sent successfully");
+      res.setHeader('Content-Type', 'application/json');
+      res.json(openaiResponse);
+      console.log("✅ Response sent successfully");
+    }
 
   } catch (error) {
     console.error("❌ ERROR:", error.message);
