@@ -516,7 +516,7 @@ app.listen(PORT, () => {
   console.log(`🔑 API Key:           ${API_KEY ? "✅ Loaded" : "❌ Missing"}`);
   console.log(`💾 Max Request Size:  100MB (10k+ messages supported)`);
   console.log(`⏱️  Request Timeout:   10 minutes`);
-  console.log(`📉 Smart Truncation:  ${ENABLE_SMART_TRUNCATION ? `ON (${MAX_MESSAGES_TO_SEND} msg limit)` : "OFF"}`);
+  console.log(`📉 Smart Truncation:  ${ENABLE_SMART_TRUNCATION ? "ON (Adaptive)" : "OFF"}`);
   console.log(`🌐 Health Check:      http://localhost:${PORT}/health`);
   console.log("=".repeat(60));
   console.log("📋 Fallback Order:");
