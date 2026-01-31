@@ -46,10 +46,21 @@ const STRICT_MODE = false; // Set to true to disable fallbacks
 // CONVERSATION TRUNCATION SETTINGS
 // ============================================================================
 
-// Enable smart truncation for 10k+ message conversations
+// Adaptive truncation - adjusts based on conversation length
 const ENABLE_SMART_TRUNCATION = true;
-const MAX_MESSAGES_TO_SEND = 100; // Send only most recent messages to NVIDIA
-const KEEP_FIRST_MESSAGES = 5;    // Always keep first N messages for context
+const TRUNCATION_TIERS = {
+  // conversations under 150 messages: send everything
+  small: { threshold: 150, keep: 150, keepFirst: 0 },
+  
+  // 150-500 messages: send 200 most important
+  medium: { threshold: 500, keep: 200, keepFirst: 10 },
+  
+  // 500-2000 messages: send 250 most important  
+  large: { threshold: 2000, keep: 250, keepFirst: 15 },
+  
+  // 2000+ messages: send 300 most important
+  huge: { threshold: Infinity, keep: 300, keepFirst: 20 }
+};
 
 // ============================================================================
 // STATE TRACKING
@@ -180,26 +191,47 @@ app.get("/v1/models", (req, res) => {
 // ============================================================================
 
 function truncateMessages(messages) {
+  if (!ENABLE_SMART_TRUNCATION) {
+    return messages;
+  }
+
+  // Determine which tier based on conversation length
+  let tier;
+  if (messages.length < TRUNCATION_TIERS.small.threshold) {
+    tier = TRUNCATION_TIERS.small;
+  } else if (messages.length < TRUNCATION_TIERS.medium.threshold) {
+    tier = TRUNCATION_TIERS.medium;
+  } else if (messages.length < TRUNCATION_TIERS.large.threshold) {
+    tier = TRUNCATION_TIERS.large;
+  } else {
+    tier = TRUNCATION_TIERS.huge;
+  }
+
   // If conversation is short enough, send everything
-  if (messages.length <= MAX_MESSAGES_TO_SEND || !ENABLE_SMART_TRUNCATION) {
+  if (messages.length <= tier.keep) {
+    console.log(`✅ Conversation size: ${messages.length} messages - sending all`);
     return messages;
   }
 
   console.log(`⚠️ Long conversation detected: ${messages.length} messages`);
-  console.log(`📉 Truncating to ${MAX_MESSAGES_TO_SEND} messages for performance`);
+  console.log(`📉 Truncating to ${tier.keep} messages (tier: ${tier.keepFirst} first + ${tier.keep - tier.keepFirst} recent)`);
 
   // Keep first N messages (character intro, setting, etc)
-  const firstMessages = messages.slice(0, KEEP_FIRST_MESSAGES);
+  const firstMessages = tier.keepFirst > 0 ? messages.slice(0, tier.keepFirst) : [];
   
   // Keep most recent messages
-  const recentMessages = messages.slice(-(MAX_MESSAGES_TO_SEND - KEEP_FIRST_MESSAGES));
+  const recentMessages = messages.slice(-(tier.keep - tier.keepFirst));
   
   // Combine them
   const truncated = [...firstMessages, ...recentMessages];
   
   console.log(`✅ Truncated from ${messages.length} to ${truncated.length} messages`);
-  console.log(`   - First ${KEEP_FIRST_MESSAGES} messages (context)`);
-  console.log(`   - Last ${recentMessages.length} messages (recent conversation)`);
+  if (tier.keepFirst > 0) {
+    console.log(`   - First ${tier.keepFirst} messages (character context)`);
+    console.log(`   - Last ${recentMessages.length} messages (recent conversation)`);
+  } else {
+    console.log(`   - Last ${recentMessages.length} messages only`);
+  }
   
   return truncated;
 }
