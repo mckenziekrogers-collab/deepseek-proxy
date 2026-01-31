@@ -31,10 +31,9 @@ const NIM_API_BASE = "https://integrate.api.nvidia.com/v1";
 const API_KEY = process.env.NIM_API_KEY;
 const PRIMARY_MODEL = process.env.NIM_MODEL || "deepseek-ai/deepseek-v3.2";
 
-// Fallback models - DeepSeek family only for consistent personality
+// Fallback models - DeepSeek family only (verified working)
 const FALLBACK_MODELS = [
-  "deepseek-ai/deepseek-r1",                    // DeepSeek R1 reasoning model
-  "deepseek-ai/deepseek-v3.1",                  // Previous version
+  "deepseek-ai/deepseek-v3.1",                  // Verified working
   "deepseek-ai/deepseek-r1-distill-qwen-32b",   // Distilled version (faster)
   "deepseek-ai/deepseek-r1-distill-qwen-14b",   // Even smaller/faster
   "deepseek-ai/deepseek-v3.1-terminus"          // Alternative V3.1
