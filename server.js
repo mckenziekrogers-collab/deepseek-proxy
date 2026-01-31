@@ -46,20 +46,20 @@ const STRICT_MODE = false; // Set to true to disable fallbacks
 // CONVERSATION TRUNCATION SETTINGS
 // ============================================================================
 
-// Adaptive truncation - adjusts based on conversation length
+// Adaptive truncation - optimized for speed
 const ENABLE_SMART_TRUNCATION = true;
 const TRUNCATION_TIERS = {
-  // conversations under 150 messages: send everything
-  small: { threshold: 150, keep: 150, keepFirst: 0 },
+  // conversations under 100 messages: send everything
+  small: { threshold: 100, keep: 100, keepFirst: 0 },
   
-  // 150-500 messages: send 200 most important
-  medium: { threshold: 500, keep: 200, keepFirst: 10 },
+  // 100-300 messages: send 120 most important
+  medium: { threshold: 300, keep: 120, keepFirst: 10 },
   
-  // 500-2000 messages: send 250 most important  
-  large: { threshold: 2000, keep: 250, keepFirst: 15 },
+  // 300-1000 messages: send 150 most important  
+  large: { threshold: 1000, keep: 150, keepFirst: 15 },
   
-  // 2000+ messages: send 300 most important
-  huge: { threshold: Infinity, keep: 300, keepFirst: 20 }
+  // 1000+ messages: send 180 most important (faster!)
+  huge: { threshold: Infinity, keep: 180, keepFirst: 20 }
 };
 
 // ============================================================================
