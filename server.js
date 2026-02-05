@@ -291,6 +291,8 @@ if (!hasSystemMessage) {
 }
 
 const totalChars = JSON.stringify(messages).length;
+
+const totalChars = JSON.stringify(messages).length;
 console.log(`📊 Received ${messages.length} messages, ${totalChars} chars total`);
 
 const processedMessages = truncateMessages(messages);
