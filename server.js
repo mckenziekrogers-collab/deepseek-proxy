@@ -66,7 +66,7 @@ if (msg.content.length <= maxChars) return msg;
 
 return {
   role: msg.role,
-  content: msg.content.slice(0, maxChars) + `...[trimmed]`
+  content: msg.content.slice(0, maxChars) + `[trimmed]`
 };
 ```
 
