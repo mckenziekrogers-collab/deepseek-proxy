@@ -262,7 +262,7 @@ if (!hasSystemMessage) {
   messages = [
     {
       role: "system",
-      content: "You are a roleplay assistant. Never summarize, recap, or explain what just happened. Never start a response by referencing the previous message. Just continue the scene naturally and stay in character."
+      content: 'You are a roleplay assistant. Never summarize, recap, or explain what just happened. Never start a response by referencing the previous message. Just continue the scene naturally and stay in character.'
     }
   ].concat(messages);
   console.log("Added anti-analyzing system message");
