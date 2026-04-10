@@ -1,9 +1,9 @@
-var express = require(“express”);
-var cors = require(“cors”);
-var axios = require(“axios”);
+const express = require(“express”);
+const cors = require(“cors”);
+const axios = require(“axios”);
 
-var app = express();
-var PORT = process.env.PORT || 3000;
+const app = express();
+const PORT = process.env.PORT || 3000;
 
 app.use(cors({
 origin: “*”,
@@ -14,31 +14,28 @@ credentials: true
 
 app.use(express.json({ limit: “100mb” }));
 
-var NIM_API_BASE = “https://integrate.api.nvidia.com/v1”;
-var API_KEY = process.env.NIM_API_KEY;
-var PRIMARY_MODEL = “deepseek-ai/deepseek-v3.2”;
+const NIM_API_BASE = “https://integrate.api.nvidia.com/v1”;
+const API_KEY = process.env.NIM_API_KEY;
+const PRIMARY_MODEL = “deepseek-ai/deepseek-v3.2”;
 
-var FALLBACK_MODELS = [
+const FALLBACK_MODELS = [
 “deepseek-ai/deepseek-v3.1”,
 “deepseek-ai/deepseek-v3.2”,
 “deepseek-ai/deepseek-v3.1-terminus”,
 “deepseek-ai/deepseek-r1-distill-qwen-32b”
 ];
 
-var ENABLE_SMART_TRUNCATION = true;
-var TRUNCATION_TIERS = {
+const ENABLE_SMART_TRUNCATION = true;
+const TRUNCATION_TIERS = {
 small:  { threshold: 100,      keep: 100, keepFirst: 0  },
-medium: { threshold: 300,      keep: 120, keepFirst: 10 },
-large:  { threshold: 1000,     keep: 150, keepFirst: 15 },
-huge:   { threshold: Infinity, keep: 180, keepFirst: 20 }
+medium: { threshold: 300,      keep: 150, keepFirst: 10 },
+large:  { threshold: 1000,     keep: 200, keepFirst: 20 },
+huge:   { threshold: Infinity, keep: 250, keepFirst: 30 }
 };
 
-var lastHit = null;
-var failedAttempts = 0;
-var currentModel = PRIMARY_MODEL;
-
-var SYSTEM_MESSAGE = “You are a roleplay assistant. Never summarize or recap what just happened. Never reference the previous message at the start of your response. Continue the scene naturally and stay in character.”;
-var TRIMMED_SUFFIX = “ [trimmed]”;
+let lastHit = null;
+let failedAttempts = 0;
+let currentModel = PRIMARY_MODEL;
 
 function recordHit(req) {
 lastHit = {
@@ -51,25 +48,32 @@ console.log(“HIT:”, lastHit);
 }
 
 function trimMessagesDynamic(messages) {
-var total = messages.length;
+const total = messages.length;
 return messages.map(function(msg, i) {
-if (typeof msg.content !== “string”) return msg;
-if (msg.role === “system”) return msg;
-if (i === total - 1) return msg;
+if (typeof msg.content !== “string”) { return msg; }
+if (msg.role === “system”) { return msg; }
+if (i === total - 1) { return msg; }
 
 ```
-var distanceFromEnd = total - 1 - i;
-var maxChars;
-if      (distanceFromEnd <= 2)  maxChars = 1500;
-else if (distanceFromEnd <= 6)  maxChars = 800;
-else if (distanceFromEnd <= 15) maxChars = 400;
-else                            maxChars = 150;
+const distanceFromEnd = total - 1 - i;
+let maxChars;
+if (distanceFromEnd <= 2) {
+  maxChars = 1500;
+} else if (distanceFromEnd <= 6) {
+  maxChars = 800;
+} else if (distanceFromEnd <= 15) {
+  maxChars = 400;
+} else if (distanceFromEnd <= 40) {
+  maxChars = 200;
+} else {
+  maxChars = 100;
+}
 
-if (msg.content.length <= maxChars) return msg;
+if (msg.content.length <= maxChars) { return msg; }
 
 return {
   role: msg.role,
-  content: msg.content.slice(0, maxChars) + TRIMMED_SUFFIX
+  content: msg.content.slice(0, maxChars) + " [trimmed]"
 };
 ```
 
@@ -81,11 +85,16 @@ if (!ENABLE_SMART_TRUNCATION) {
 return trimMessagesDynamic(messages);
 }
 
-var tier;
-if      (messages.length < TRUNCATION_TIERS.small.threshold)  tier = TRUNCATION_TIERS.small;
-else if (messages.length < TRUNCATION_TIERS.medium.threshold) tier = TRUNCATION_TIERS.medium;
-else if (messages.length < TRUNCATION_TIERS.large.threshold)  tier = TRUNCATION_TIERS.large;
-else                                                           tier = TRUNCATION_TIERS.huge;
+let tier;
+if (messages.length < TRUNCATION_TIERS.small.threshold) {
+tier = TRUNCATION_TIERS.small;
+} else if (messages.length < TRUNCATION_TIERS.medium.threshold) {
+tier = TRUNCATION_TIERS.medium;
+} else if (messages.length < TRUNCATION_TIERS.large.threshold) {
+tier = TRUNCATION_TIERS.large;
+} else {
+tier = TRUNCATION_TIERS.huge;
+}
 
 if (messages.length <= tier.keep) {
 console.log(“Conversation size:”, messages.length, “messages - sending all”);
@@ -95,9 +104,9 @@ return trimMessagesDynamic(messages);
 console.log(“Long conversation detected:”, messages.length, “messages”);
 console.log(“Truncating to”, tier.keep, “messages”);
 
-var firstMessages = tier.keepFirst > 0 ? messages.slice(0, tier.keepFirst) : [];
-var recentMessages = messages.slice(-(tier.keep - tier.keepFirst));
-var truncated = firstMessages.concat(recentMessages);
+const firstMessages = tier.keepFirst > 0 ? messages.slice(0, tier.keepFirst) : [];
+const recentMessages = messages.slice(-(tier.keep - tier.keepFirst));
+const truncated = firstMessages.concat(recentMessages);
 
 console.log(“Truncated from”, messages.length, “to”, truncated.length, “messages”);
 return trimMessagesDynamic(truncated);
@@ -138,8 +147,10 @@ hasNimKey: !!API_KEY
 app.get(”/upstream/models”, async function(req, res) {
 recordHit(req);
 try {
-if (!API_KEY) return res.status(500).json({ error: { message: “Missing NIM_API_KEY” } });
-var r = await axios.get(NIM_API_BASE + “/models”, {
+if (!API_KEY) {
+return res.status(500).json({ error: { message: “Missing NIM_API_KEY” } });
+}
+const r = await axios.get(NIM_API_BASE + “/models”, {
 headers: { Authorization: “Bearer “ + API_KEY },
 timeout: 60000
 });
@@ -173,30 +184,29 @@ data: [
 
 async function makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum) {
 attemptNum = attemptNum || 0;
-var modelToUse = attemptNum === 0 ? currentModel : FALLBACK_MODELS[attemptNum - 1];
+const modelToUse = attemptNum === 0 ? currentModel : FALLBACK_MODELS[attemptNum - 1];
 
-if (!modelToUse) throw new Error(“All fallback models exhausted”);
+if (!modelToUse) {
+throw new Error(“All fallback models exhausted”);
+}
 
 console.log(“Attempt”, attemptNum + 1, “- Using model”, modelToUse);
 
 try {
-var requestBody = {
-model: modelToUse,
-messages: messages,
-temperature: temperature,
-max_tokens: max_tokens,
-stream: stream
-};
+const requestHeaders = {};
+requestHeaders[“Authorization”] = “Bearer “ + API_KEY;
+requestHeaders[“Content-Type”] = “application/json”;
 
 ```
-var requestHeaders = {
-  Authorization: "Bearer " + API_KEY,
-  "Content-Type": "application/json"
-};
-
-var response = await axios.post(
+const response = await axios.post(
   NIM_API_BASE + "/chat/completions",
-  requestBody,
+  {
+    model: modelToUse,
+    messages: messages,
+    temperature: temperature,
+    max_tokens: max_tokens,
+    stream: stream
+  },
   {
     headers: requestHeaders,
     timeout: 600000,
@@ -244,33 +254,39 @@ recordHit(req);
 console.log(“POST /v1/chat/completions”);
 
 try {
-if (!API_KEY) return res.status(500).json({ error: { message: “Missing NIM_API_KEY” } });
-
-```
-var body = req.body || {};
-var messages = Array.isArray(body.messages) ? body.messages : [];
-var temperature = body.temperature !== undefined ? body.temperature : 0.7;
-var requestedMaxTokens = body.max_tokens !== undefined ? body.max_tokens : 12000;
-var max_tokens = Math.min(Math.max(requestedMaxTokens, 200), 3000);
-var stream = body.stream || false;
-
-var hasSystemMessage = messages.some(function(msg) { return msg.role === "system"; });
-if (!hasSystemMessage) {
-  messages = [{ role: "system", content: SYSTEM_MESSAGE }].concat(messages);
-  console.log("Added anti-analyzing system message");
+if (!API_KEY) {
+return res.status(500).json({ error: { message: “Missing NIM_API_KEY” } });
 }
 
-var totalChars = JSON.stringify(messages).length;
+```
+const body = req.body || {};
+let messages = Array.isArray(body.messages) ? body.messages : [];
+const temperature = body.temperature !== undefined ? body.temperature : 0.7;
+const requestedMaxTokens = body.max_tokens !== undefined ? body.max_tokens : 4000;
+const max_tokens = Math.min(Math.max(requestedMaxTokens, 200), 3000);
+const stream = body.stream || false;
+
+const hasSystemMessage = messages.some(function(msg) { return msg.role === "system"; });
+if (!hasSystemMessage) {
+  const systemMsg = {
+    role: "system",
+    content: "You are a roleplay assistant. Never summarize or recap what just happened. Never reference the previous message at the start of your response. Continue the scene naturally and stay in character. Keep responses concise and varied in length."
+  };
+  messages = [systemMsg].concat(messages);
+  console.log("Added system message");
+}
+
+const totalChars = JSON.stringify(messages).length;
 console.log("Received", messages.length, "messages,", totalChars, "chars total");
 
-var processedMessages = truncateMessages(messages);
-var processedChars = JSON.stringify(processedMessages).length;
+const processedMessages = truncateMessages(messages);
+const processedChars = JSON.stringify(processedMessages).length;
 
 if (processedMessages.length < messages.length) {
   console.log("Sending", processedMessages.length, "messages,", processedChars, "chars to NVIDIA");
 }
 
-var response = await makeNvidiaRequest(processedMessages, temperature, max_tokens, stream, 0);
+const response = await makeNvidiaRequest(processedMessages, temperature, max_tokens, stream, 0);
 
 if (stream) {
   res.setHeader("Content-Type", "text/event-stream");
@@ -282,7 +298,7 @@ if (stream) {
   return;
 }
 
-var reply = (
+const reply = (
   response.data &&
   response.data.choices &&
   response.data.choices[0] &&
@@ -290,7 +306,7 @@ var reply = (
   response.data.choices[0].message.content
 ) || "";
 
-var openaiResponse = {
+const openaiResponse = {
   id: (response.data && response.data.id) || ("chatcmpl-" + Date.now()),
   object: "chat.completion",
   created: (response.data && response.data.created) || Math.floor(Date.now() / 1000),
@@ -334,7 +350,7 @@ if (!error.response || !error.response.data) {
 
 if (error.response && error.response.status === 429) {
   return res.status(429).json({
-    error: { message: "Rate limit exceeded. Please wait 5-10 minutes.", type: "rate_limit_error", code: 429 }
+    error: { message: "Rate limit exceeded. Please wait a few minutes.", type: "rate_limit_error", code: 429 }
   });
 }
 
