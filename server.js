@@ -120,6 +120,7 @@ app.get("/health", (req, res) => {
     failedAttempts: failedAttempts,
     fallbackModels: FALLBACK_MODELS.length,
     hasNimKey: !!API_KEY,
+    antiAnalyzing: true,
     dynamicTrimming: true
   });
 });
