@@ -57,22 +57,22 @@ function trimMessagesDynamic(messages) {
     const distanceFromEnd = total - 1 - i;
     let maxChars;
     if (distanceFromEnd <= 2) {
-      maxChars = 1500;
+      maxChars = 2000;
     } else if (distanceFromEnd <= 6) {
-      maxChars = 800;
+      maxChars = 1200;
     } else if (distanceFromEnd <= 15) {
-      maxChars = 400;
+      maxChars = 600;
     } else if (distanceFromEnd <= 40) {
-      maxChars = 200;
+      maxChars = 300;
     } else {
-      maxChars = 100;
+      maxChars = 150;
     }
 
     if (msg.content.length <= maxChars) { return msg; }
 
     return {
       role: msg.role,
-      content: msg.content.slice(0, maxChars) + " [trimmed]"
+      content: msg.content.slice(0, maxChars)
     };
   });
 }
