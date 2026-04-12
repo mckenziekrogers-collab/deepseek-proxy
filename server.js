@@ -257,7 +257,7 @@ app.post("/v1/chat/completions", async function(req, res) {
     let messages = Array.isArray(body.messages) ? body.messages : [];
     const temperature = body.temperature !== undefined ? body.temperature : 0.7;
     const requestedMaxTokens = body.max_tokens !== undefined ? body.max_tokens : 4000;
-    const max_tokens = Math.min(Math.max(requestedMaxTokens, 200), 3000);
+    const max_tokens = Math.min(Math.max(requestedMaxTokens, 200), 6000);
     const stream = body.stream || false;
 
     const hasSystemMessage = messages.some(function(msg) { return msg.role === "system"; });
