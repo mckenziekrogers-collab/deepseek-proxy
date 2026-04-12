@@ -77,6 +77,31 @@ function trimMessagesDynamic(messages) {
   });
 }
 
+function injectPrefill(messages) {
+  if (messages.length === 0) { return messages; }
+  const last = messages[messages.length - 1];
+  if (last.role !== "user") { return messages; }
+
+  const prefills = [
+    "The scene continues.",
+    "A moment passes.",
+    "The air shifts.",
+    "Silence stretches between them.",
+    "Something stirs.",
+    "The world moves on."
+  ];
+
+  const prefill = prefills[Math.floor(Math.random() * prefills.length)];
+
+  const injected = messages.slice(0, messages.length - 1).concat([
+    { role: "assistant", content: prefill },
+    last
+  ]);
+
+  console.log("Injected prefill:", prefill);
+  return injected;
+}
+
 function trimLastUserMessage(messages) {
   const lastUserIndex = messages.map(function(m) { return m.role; }).lastIndexOf("user");
   if (lastUserIndex === -1) { return messages; }
@@ -323,7 +348,7 @@ app.post("/v1/chat/completions", async function(req, res) {
     const totalChars = JSON.stringify(messages).length;
     console.log("Received", messages.length, "messages,", totalChars, "chars total");
 
-    const processedMessages = trimLastUserMessage(stripSummaryOpeners(truncateMessages(messages)));
+    const processedMessages = injectPrefill(trimLastUserMessage(stripSummaryOpeners(truncateMessages(messages))));
     const processedChars = JSON.stringify(processedMessages).length;
 
     if (processedMessages.length < messages.length) {
