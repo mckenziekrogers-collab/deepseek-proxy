@@ -77,6 +77,56 @@ function trimMessagesDynamic(messages) {
   });
 }
 
+function trimLastUserMessage(messages) {
+  const lastUserIndex = messages.map(function(m) { return m.role; }).lastIndexOf("user");
+  if (lastUserIndex === -1) { return messages; }
+
+  const lastUser = messages[lastUserIndex];
+  if (typeof lastUser.content !== "string") { return messages; }
+  if (lastUser.content.length <= 800) { return messages; }
+
+  const trimmed = messages.slice();
+  trimmed[lastUserIndex] = {
+    role: "user",
+    content: lastUser.content.slice(0, 800)
+  };
+  console.log("Trimmed last user message from", lastUser.content.length, "to 800 chars");
+  return trimmed;
+}
+
+function stripSummaryOpeners(messages) {
+  const summaryPatterns = [
+    /^(as |just |you just |you had |having just |after |following |with |upon |in response|reacting|acknowledging|noting|seeing as|given that|since you|because you)/i,
+    /^(you said|you mentioned|you asked|you told|you explained|you described|you stated)/i,
+    /^(as you|as we|as the|as your|as i)/i,
+    /^(it seems|it appears|it looks like|it sounds like)/i,
+    /^(indeed|certainly|absolutely|of course|understood|i see|i understand|i hear)/i,
+    /^(recap|summary|to summarize|in summary|to recap)/i
+  ];
+
+  return messages.map(function(msg) {
+    if (msg.role !== "assistant") { return msg; }
+    if (typeof msg.content !== "string") { return msg; }
+
+    let content = msg.content;
+
+    const lines = content.split("\n");
+    const filteredLines = lines.filter(function(line) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) { return true; }
+      for (let i = 0; i < summaryPatterns.length; i++) {
+        if (summaryPatterns[i].test(trimmed)) { return false; }
+      }
+      return true;
+    });
+
+    return {
+      role: msg.role,
+      content: filteredLines.join("\n").trim()
+    };
+  });
+}
+
 function truncateMessages(messages) {
   if (!ENABLE_SMART_TRUNCATION) {
     return trimMessagesDynamic(messages);
@@ -264,7 +314,7 @@ app.post("/v1/chat/completions", async function(req, res) {
     if (!hasSystemMessage) {
       const systemMsg = {
         role: "system",
-        content: "You are a roleplay assistant. Your only job is to continue the scene forward. Never summarize, recap, repeat, or paraphrase anything the user just said or did. Never acknowledge or reference the previous message. Do not mirror or echo user input back at them in any form. Just write what happens next, naturally, as if continuing a story. Stay in character at all times."
+        content: "You are a character in a collaborative roleplay story. The user writes their character's actions and dialogue. You write ONLY your character's response - what your character does, says, thinks, and how the scene reacts. Never rewrite, expand, repeat, summarize, or paraphrase what the user just wrote. Never acknowledge the user's input. Your response picks up exactly where the user's message ends and moves the story forward. Write only new content. Stay in third person present tense."
       };
       messages = [systemMsg].concat(messages);
       console.log("Added system message");
@@ -273,7 +323,7 @@ app.post("/v1/chat/completions", async function(req, res) {
     const totalChars = JSON.stringify(messages).length;
     console.log("Received", messages.length, "messages,", totalChars, "chars total");
 
-    const processedMessages = truncateMessages(messages);
+    const processedMessages = trimLastUserMessage(stripSummaryOpeners(truncateMessages(messages)));
     const processedChars = JSON.stringify(processedMessages).length;
 
     if (processedMessages.length < messages.length) {
