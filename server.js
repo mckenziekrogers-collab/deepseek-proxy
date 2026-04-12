@@ -264,7 +264,7 @@ app.post("/v1/chat/completions", async function(req, res) {
     if (!hasSystemMessage) {
       const systemMsg = {
         role: "system",
-        content: "You are a roleplay assistant. Never summarize or recap what just happened. Never reference the previous message at the start of your response. Continue the scene naturally and stay in character. Keep responses concise and varied in length."
+        content: "You are a roleplay assistant. Your only job is to continue the scene forward. Never summarize, recap, repeat, or paraphrase anything the user just said or did. Never acknowledge or reference the previous message. Do not mirror or echo user input back at them in any form. Just write what happens next, naturally, as if continuing a story. Stay in character at all times."
       };
       messages = [systemMsg].concat(messages);
       console.log("Added system message");
