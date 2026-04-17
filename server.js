@@ -16,9 +16,10 @@ app.use(express.json({ limit: "100mb" }));
 
 const NIM_API_BASE = "https://integrate.api.nvidia.com/v1";
 const API_KEY = process.env.NIM_API_KEY;
-const PRIMARY_MODEL = "deepseek-ai/deepseek-v3.2";
+const PRIMARY_MODEL = "deepseek-ai/deepseek-v3.1-terminus";
 
 const FALLBACK_MODELS = [
+  "deepseek-ai/deepseek-v3.1-terminus",
   "deepseek-ai/deepseek-v3.2",
   "deepseek-ai/deepseek-r1-distill-qwen-32b",
   "deepseek-ai/deepseek-r1-distill-llama-70b",
@@ -457,8 +458,8 @@ app.use(function(req, res) {
 
 app.listen(PORT, function() {
   console.log("OpenAI to NVIDIA NIM Proxy running on port", PORT);
-  console.log("Primary Model: deepseek-ai/deepseek-v3.2");
-  console.log("Fallback Order: v3.2 -> r1-distill-32b -> r1-distill-70b -> r1");
+  console.log("Primary Model: deepseek-ai/deepseek-v3.1-terminus");
+  console.log("Fallback Order: v3.1-terminus -> v3.2 -> r1-distill-32b -> r1-distill-70b -> r1");
   console.log("API Key:", API_KEY ? "Loaded" : "Missing");
   console.log("Anti-Analyzing: ENABLED");
   console.log("Dynamic Trimming: ENABLED");
