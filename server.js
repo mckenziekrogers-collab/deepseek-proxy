@@ -16,12 +16,12 @@ app.use(express.json({ limit: "100mb" }));
 
 const NIM_API_BASE = "https://integrate.api.nvidia.com/v1";
 const API_KEY = process.env.NIM_API_KEY;
-const PRIMARY_MODEL = "deepseek-ai/deepseek-v3.2";
+const PRIMARY_MODEL = "meta/llama-3.1-70b-instruct";
 
 const FALLBACK_MODELS = [
+  "meta/llama-3.1-8b-instruct",
   "deepseek-ai/deepseek-v3.1",
   "deepseek-ai/deepseek-v3.2",
-  "deepseek-ai/deepseek-v3.1-terminus",
   "deepseek-ai/deepseek-r1-distill-qwen-32b"
 ];
 
