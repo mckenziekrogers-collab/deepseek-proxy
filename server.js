@@ -394,6 +394,22 @@ app.post("/v1/chat/completions", async function(req, res) {
       console.log("Added system message");
     }
 
+    // Strip duplicate system messages on long chats — keep only the first one
+    if (messages.length > 5) {
+      var seenSystem = false;
+      messages = messages.filter(function(msg) {
+        if (msg.role === "system") {
+          if (!seenSystem) {
+            seenSystem = true;
+            return true;
+          }
+          return false;
+        }
+        return true;
+      });
+      console.log("Deduplicated system messages");
+    }
+
     const totalChars = JSON.stringify(messages).length;
     console.log("Received", messages.length, "messages,", totalChars, "chars total");
 
