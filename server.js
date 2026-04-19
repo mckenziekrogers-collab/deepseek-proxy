@@ -19,10 +19,10 @@ const API_KEY = process.env.NIM_API_KEY;
 const PRIMARY_MODEL = "deepseek-ai/deepseek-v3.2";
 
 const FALLBACK_MODELS = [
-  "deepseek-ai/deepseek-r1-distill-qwen-32b",
-  "deepseek-ai/deepseek-r1-distill-llama-70b",
-  "deepseek-ai/deepseek-r1",
-  "deepseek-ai/deepseek-v3.1-terminus"
+  "deepseek-ai/deepseek-v3.1-terminus",
+  "deepseek-ai/deepseek-v3.2",
+  "deepseek-ai/deepseek-v3.1-terminus",
+  "deepseek-ai/deepseek-v3.2"
 ];
 
 const ENABLE_SMART_TRUNCATION = true;
