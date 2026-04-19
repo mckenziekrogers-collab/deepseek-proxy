@@ -16,14 +16,13 @@ app.use(express.json({ limit: "100mb" }));
 
 const NIM_API_BASE = "https://integrate.api.nvidia.com/v1";
 const API_KEY = process.env.NIM_API_KEY;
-const PRIMARY_MODEL = "deepseek-ai/deepseek-v3.1-terminus";
+const PRIMARY_MODEL = "deepseek-ai/deepseek-v3.2";
 
 const FALLBACK_MODELS = [
-  "deepseek-ai/deepseek-v3.1-terminus",
-  "deepseek-ai/deepseek-v3.2",
   "deepseek-ai/deepseek-r1-distill-qwen-32b",
   "deepseek-ai/deepseek-r1-distill-llama-70b",
-  "deepseek-ai/deepseek-r1"
+  "deepseek-ai/deepseek-r1",
+  "deepseek-ai/deepseek-v3.1-terminus"
 ];
 
 const ENABLE_SMART_TRUNCATION = true;
@@ -34,9 +33,49 @@ const TRUNCATION_TIERS = {
   huge:   { threshold: Infinity, keep: 250, keepFirst: 30 }
 };
 
+const BACKOFF_BASE = 1000;
+const BACKOFF_MAX = 16000;
+
 let lastHit = null;
 let failedAttempts = 0;
 let currentModel = PRIMARY_MODEL;
+
+const contextCache = new Map();
+const CACHE_MAX_SIZE = 50;
+const CACHE_TTL = 1000 * 60 * 10;
+
+function getCacheKey(messages) {
+  if (messages.length < 3) { return null; }
+  const cacheableMessages = messages.slice(0, -1);
+  return JSON.stringify(cacheableMessages).slice(0, 500);
+}
+
+function getFromCache(key) {
+  if (!key) { return null; }
+  const entry = contextCache.get(key);
+  if (!entry) { return null; }
+  if (Date.now() - entry.time > CACHE_TTL) {
+    contextCache.delete(key);
+    return null;
+  }
+  console.log("Cache hit - reusing context");
+  return entry.value;
+}
+
+function setCache(key, value) {
+  if (!key) { return; }
+  if (contextCache.size >= CACHE_MAX_SIZE) {
+    const firstKey = contextCache.keys().next().value;
+    contextCache.delete(firstKey);
+  }
+  contextCache.set(key, { value: value, time: Date.now() });
+}
+
+function getBackoffDelay(attemptNum) {
+  const delay = Math.min(BACKOFF_BASE * Math.pow(2, attemptNum), BACKOFF_MAX);
+  const jitter = Math.random() * 500;
+  return delay + jitter;
+}
 
 function recordHit(req) {
   lastHit = {
@@ -197,9 +236,12 @@ app.get("/health", function(req, res) {
     currentModel: currentModel,
     failedAttempts: failedAttempts,
     fallbackModels: FALLBACK_MODELS.length,
+    cacheSize: contextCache.size,
     hasNimKey: !!API_KEY,
     antiAnalyzing: true,
-    dynamicTrimming: true
+    dynamicTrimming: true,
+    streaming: true,
+    exponentialBackoff: true
   });
 });
 
@@ -211,6 +253,7 @@ app.get("/whoami", function(req, res) {
     currentModel: currentModel,
     failedAttempts: failedAttempts,
     fallbackModels: FALLBACK_MODELS,
+    cacheSize: contextCache.size,
     hasNimKey: !!API_KEY
   });
 });
@@ -245,10 +288,10 @@ app.get("/v1/models", function(req, res) {
   res.json({
     object: "list",
     data: [
-      { id: "gpt-4",         object: "model", created: Date.now(), owned_by: "proxy" },
-      { id: "gpt-4o",        object: "model", created: Date.now(), owned_by: "proxy" },
-      { id: "gpt-3.5-turbo", object: "model", created: Date.now(), owned_by: "proxy" },
-      { id: PRIMARY_MODEL,   object: "model", created: Date.now(), owned_by: "proxy" }
+      { id: "gpt-4",         object: "model", created: Math.floor(Date.now() / 1000), owned_by: "proxy" },
+      { id: "gpt-4o",        object: "model", created: Math.floor(Date.now() / 1000), owned_by: "proxy" },
+      { id: "gpt-3.5-turbo", object: "model", created: Math.floor(Date.now() / 1000), owned_by: "proxy" },
+      { id: PRIMARY_MODEL,   object: "model", created: Math.floor(Date.now() / 1000), owned_by: "proxy" }
     ]
   });
 });
@@ -294,11 +337,13 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
       return response;
     }
 
-    if (response.status >= 400 && response.status < 500) {
-      console.log("Model", modelToUse, "returned", response.status, "trying fallback");
+    if (response.status === 429 || (response.status >= 400 && response.status < 500)) {
+      console.log("Model", modelToUse, "returned", response.status, "trying fallback with backoff");
       if (attemptNum < FALLBACK_MODELS.length) {
         failedAttempts++;
-        await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+        const delay = getBackoffDelay(attemptNum);
+        console.log("Waiting", Math.round(delay), "ms before retry");
+        await new Promise(function(resolve) { setTimeout(resolve, delay); });
         return makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum + 1);
       }
       throw { response: response };
@@ -310,8 +355,9 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
     console.log("Model", modelToUse, "failed:", error.message);
     if (attemptNum < FALLBACK_MODELS.length) {
       failedAttempts++;
-      console.log("Trying fallback model");
-      await new Promise(function(resolve) { setTimeout(resolve, 2000); });
+      const delay = getBackoffDelay(attemptNum);
+      console.log("Waiting", Math.round(delay), "ms before retry");
+      await new Promise(function(resolve) { setTimeout(resolve, delay); });
       return makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum + 1);
     }
     throw error;
@@ -321,6 +367,10 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
 app.post("/v1/chat/completions", async function(req, res) {
   recordHit(req);
   console.log("POST /v1/chat/completions");
+
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("X-Accel-Buffering", "no");
 
   try {
     if (!API_KEY) {
@@ -332,7 +382,7 @@ app.post("/v1/chat/completions", async function(req, res) {
     const temperature = body.temperature !== undefined ? body.temperature : 0.7;
     const requestedMaxTokens = body.max_tokens !== undefined ? body.max_tokens : 4000;
     const max_tokens = Math.min(Math.max(requestedMaxTokens, 200), 6000);
-    const stream = body.stream || false;
+    const stream = body.stream !== undefined ? body.stream : true;
 
     const hasSystemMessage = messages.some(function(msg) { return msg.role === "system"; });
     if (!hasSystemMessage) {
@@ -347,9 +397,18 @@ app.post("/v1/chat/completions", async function(req, res) {
     const totalChars = JSON.stringify(messages).length;
     console.log("Received", messages.length, "messages,", totalChars, "chars total");
 
-    const processedMessages = injectPrefill(trimLastUserMessage(stripSummaryOpeners(truncateMessages(messages))));
-    const processedChars = JSON.stringify(processedMessages).length;
+    const cacheKey = getCacheKey(messages);
+    const cachedContext = getFromCache(cacheKey);
 
+    let processedMessages;
+    if (cachedContext) {
+      processedMessages = cachedContext.concat(messages.slice(-1));
+    } else {
+      processedMessages = injectPrefill(trimLastUserMessage(stripSummaryOpeners(truncateMessages(messages))));
+      setCache(cacheKey, processedMessages.slice(0, -1));
+    }
+
+    const processedChars = JSON.stringify(processedMessages).length;
     if (processedMessages.length < messages.length) {
       console.log("Sending", processedMessages.length, "messages,", processedChars, "chars to NVIDIA");
     }
@@ -377,12 +436,14 @@ app.post("/v1/chat/completions", async function(req, res) {
     const openaiResponse = {
       id: (response.data && response.data.id) || ("chatcmpl-" + Date.now()),
       object: "chat.completion",
-      created: (response.data && response.data.created) || Math.floor(Date.now() / 1000),
+      created: Math.floor(Date.now() / 1000),
       model: body.model || "gpt-3.5-turbo",
+      system_fingerprint: null,
       choices: [
         {
           index: 0,
           message: { role: "assistant", content: reply || " " },
+          logprobs: null,
           finish_reason: (
             response.data &&
             response.data.choices &&
@@ -391,14 +452,13 @@ app.post("/v1/chat/completions", async function(req, res) {
           ) || "stop"
         }
       ],
-      usage: (response.data && response.data.usage) || {
-        prompt_tokens: 10,
-        completion_tokens: 50,
-        total_tokens: 60
+      usage: (response.data && response.data.usage && response.data.usage.total_tokens > 0) ? response.data.usage : {
+        prompt_tokens: 100,
+        completion_tokens: 200,
+        total_tokens: 300
       }
     };
 
-    res.setHeader("Content-Type", "application/json");
     res.json(openaiResponse);
     console.log("Response sent -", reply.length, "chars, model:", currentModel);
 
@@ -458,9 +518,10 @@ app.use(function(req, res) {
 
 app.listen(PORT, function() {
   console.log("OpenAI to NVIDIA NIM Proxy running on port", PORT);
-  console.log("Primary Model: deepseek-ai/deepseek-v3.1-terminus");
-  console.log("Fallback Order: v3.1-terminus -> v3.2 -> r1-distill-32b -> r1-distill-70b -> r1");
+  console.log("Primary Model: deepseek-ai/deepseek-v3.2");
+  console.log("Fallback Order: r1-distill-32b -> r1-distill-70b -> r1 -> v3.1-terminus");
   console.log("API Key:", API_KEY ? "Loaded" : "Missing");
-  console.log("Anti-Analyzing: ENABLED");
-  console.log("Dynamic Trimming: ENABLED");
+  console.log("Streaming: ENABLED by default");
+  console.log("Context Cache: ENABLED");
+  console.log("Exponential Backoff: ENABLED");
 });
