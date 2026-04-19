@@ -382,7 +382,7 @@ app.post("/v1/chat/completions", async function(req, res) {
     const temperature = body.temperature !== undefined ? body.temperature : 0.7;
     const requestedMaxTokens = body.max_tokens !== undefined ? body.max_tokens : 4000;
     const max_tokens = Math.min(Math.max(requestedMaxTokens, 200), 6000);
-    const stream = body.stream !== undefined ? body.stream : true;
+    const stream = body.stream !== undefined ? body.stream : false;
 
     const hasSystemMessage = messages.some(function(msg) { return msg.role === "system"; });
     if (!hasSystemMessage) {
