@@ -139,6 +139,13 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
       currentModel = modelToUse;
       return response;
     }
+    if (response.status === 429) {
+      console.log("RATE LIMITED (429) - NVIDIA is overwhelmed. Backing off...");
+      failedAttempts++;
+      const retryAfter = (attemptNum + 1) * 5000;
+      await new Promise(r => setTimeout(r, retryAfter));
+      return makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum + 1);
+    }
     throw { response };
   } catch (error) {
     console.log("Model", modelToUse, "failed:", error.message);
