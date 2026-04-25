@@ -16,13 +16,13 @@ app.use(express.json({ limit: "100mb" }));
 
 const NIM_API_BASE = "https://integrate.api.nvidia.com/v1";
 const API_KEY = process.env.NIM_API_KEY;
-const PRIMARY_MODEL = "deepseek-ai/deepseek-v3.2";
+const PRIMARY_MODEL = "deepseek-ai/deepseek-v4-flash";
 
 const FALLBACK_MODELS = [
-  "deepseek-ai/deepseek-v3.1-terminus",
+  "deepseek-ai/deepseek-v4-pro",
+  "deepseek-ai/deepseek-v4-flash",
   "deepseek-ai/deepseek-v3.2",
-  "deepseek-ai/deepseek-v3.1-terminus",
-  "deepseek-ai/deepseek-v3.2"
+  "deepseek-ai/deepseek-v3.1-terminus"
 ];
 
 const ENABLE_SMART_TRUNCATION = true;
@@ -240,7 +240,6 @@ app.get("/health", function(req, res) {
     hasNimKey: !!API_KEY,
     antiAnalyzing: true,
     dynamicTrimming: true,
-    streaming: true,
     exponentialBackoff: true
   });
 });
@@ -382,7 +381,7 @@ app.post("/v1/chat/completions", async function(req, res) {
     const temperature = body.temperature !== undefined ? body.temperature : 0.7;
     const requestedMaxTokens = body.max_tokens !== undefined ? body.max_tokens : 4000;
     const max_tokens = Math.min(Math.max(requestedMaxTokens, 200), 6000);
-    const stream = body.stream !== undefined ? body.stream : false;
+    const stream = body.stream || false;
 
     const hasSystemMessage = messages.some(function(msg) { return msg.role === "system"; });
     if (!hasSystemMessage) {
@@ -394,7 +393,6 @@ app.post("/v1/chat/completions", async function(req, res) {
       console.log("Added system message");
     }
 
-    // Strip duplicate system messages on long chats — keep only the first one
     if (messages.length > 5) {
       var seenSystem = false;
       messages = messages.filter(function(msg) {
@@ -534,10 +532,11 @@ app.use(function(req, res) {
 
 app.listen(PORT, function() {
   console.log("OpenAI to NVIDIA NIM Proxy running on port", PORT);
-  console.log("Primary Model: deepseek-ai/deepseek-v3.2");
-  console.log("Fallback Order: r1-distill-32b -> r1-distill-70b -> r1 -> v3.1-terminus");
+  console.log("Primary Model: deepseek-ai/deepseek-v4-flash");
+  console.log("Fallback Order: v4-pro -> v4-flash -> v3.2 -> v3.1-terminus");
   console.log("API Key:", API_KEY ? "Loaded" : "Missing");
-  console.log("Streaming: ENABLED by default");
-  console.log("Context Cache: ENABLED");
+  console.log("Anti-Analyzing: ENABLED");
+  console.log("Dynamic Trimming: ENABLED");
   console.log("Exponential Backoff: ENABLED");
+  console.log("Context Cache: ENABLED");
 });
