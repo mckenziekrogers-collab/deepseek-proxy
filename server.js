@@ -196,7 +196,8 @@ async function handleChatCompletions(req, res) {
     }
 
     let reply = response.data?.choices?.[0]?.message?.content || "";
-    reply = reply.replace(/([a-zA-Z])\d+([a-zA-Z])/g, '$1$2');
+    reply = reply.replace(/([a-zA-Z])\d+([a-zA-Z])/g, '$1$2');  // runn5ing -> running
+    reply = reply.replace(/([a-zA-Z])\d+\b/g, '$1');             // ti16 -> ti (trims trailing digits)
     reply = reply.replace(/^\d+\.\s+/gm, '');
 
     res.setHeader("Content-Type", "application/json");
