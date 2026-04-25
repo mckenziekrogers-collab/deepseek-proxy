@@ -24,7 +24,6 @@ const FALLBACK_MODELS = [
   "deepseek-ai/deepseek-v3.1-terminus"
 ];
 
-// CRITICAL: V4-Flash Prose Guard
 const PROSE_GUARD = "### IMPORTANT: You must write exclusively in natural language. Use of numerical digits (0-9) is STRICTLY FORBIDDEN. Do not use lists, numbered steps, or alphanumeric word-splitting. Deliver fluid, immersive narrative prose only.";
 
 const ENABLE_SMART_TRUNCATION = true;
@@ -48,17 +47,13 @@ const CACHE_TTL = 1000 * 60 * 10;
 
 function getCacheKey(messages) {
   if (messages.length < 3) return null;
-  const cacheableMessages = messages.slice(0, -1);
-  return JSON.stringify(cacheableMessages).slice(0, 500);
+  return JSON.stringify(messages.slice(0, -1)).slice(0, 500);
 }
 
 function getFromCache(key) {
   if (!key) return null;
   const entry = contextCache.get(key);
-  if (!entry || Date.now() - entry.time > CACHE_TTL) {
-    contextCache.delete(key);
-    return null;
-  }
+  if (!entry || Date.now() - entry.time > CACHE_TTL) { contextCache.delete(key); return null; }
   return entry.value;
 }
 
@@ -104,20 +99,37 @@ function truncateMessages(messages) {
   return trimMessagesDynamic(truncated);
 }
 
-// ROUTING
-app.get("/health", (req, res) => res.json({ status: "ok", primaryModel: PRIMARY_MODEL, currentModel, failedAttempts }));
+app.get("/", function(req, res) {
+  recordHit(req);
+  res.type("text").send("Proxy running");
+});
 
-app.get("/v1/models", (req, res) => res.json({
-  object: "list",
-  data: [{ id: PRIMARY_MODEL, object: "model", created: Math.floor(Date.now() / 1000), owned_by: "proxy" }]
-}));
+app.get("/health", (req, res) => {
+  recordHit(req);
+  res.json({ status: "ok", primaryModel: PRIMARY_MODEL, currentModel, failedAttempts });
+});
+
+app.get("/v1", function(req, res) {
+  recordHit(req);
+  res.json({ status: "ok", message: "OpenAI-compatible API v1", endpoints: ["/v1/models", "/v1/chat/completions"] });
+});
+
+app.get("/v1/models", (req, res) => {
+  recordHit(req);
+  res.json({
+    object: "list",
+    data: [{ id: PRIMARY_MODEL, object: "model", created: Math.floor(Date.now() / 1000), owned_by: "proxy" }]
+  });
+});
 
 async function makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum = 0) {
   const modelToUse = attemptNum === 0 ? currentModel : FALLBACK_MODELS[attemptNum - 1];
   if (!modelToUse) throw new Error("All fallback models exhausted");
 
+  console.log("Attempt", attemptNum + 1, "- Using model", modelToUse);
+
   try {
-    const response = await axios.post(`${NIM_API_BASE}/chat/completions`, 
+    const response = await axios.post(`${NIM_API_BASE}/chat/completions`,
       { model: modelToUse, messages, temperature, max_tokens, stream },
       { headers: { "Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json" }, timeout: 600000, responseType: stream ? "stream" : "json" }
     );
@@ -129,6 +141,7 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
     }
     throw { response };
   } catch (error) {
+    console.log("Model", modelToUse, "failed:", error.message);
     if (attemptNum < FALLBACK_MODELS.length) {
       failedAttempts++;
       await new Promise(r => setTimeout(r, getBackoffDelay(attemptNum)));
@@ -138,22 +151,18 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
   }
 }
 
-app.post("/v1/chat/completions", async function(req, res) {
+async function handleChatCompletions(req, res) {
   recordHit(req);
-  res.setHeader("Content-Type", "application/json");
 
   try {
     if (!API_KEY) return res.status(500).json({ error: { message: "Missing NIM_API_KEY" } });
 
     const body = req.body || {};
     let messages = Array.isArray(body.messages) ? body.messages : [];
-    
-    // LOCKED AT 1.1: Day-one sweet spot for V4-Flash roleplay
-    const temperature = 1.1; 
+    const temperature = 1.1;
     const max_tokens = Math.min(Math.max(body.max_tokens || 4000, 200), 6000);
     const stream = body.stream || false;
 
-    // INJECT PROSE GUARD
     const sysIdx = messages.findIndex(m => m.role === "system");
     if (sysIdx === -1) {
       messages.unshift({ role: "system", content: PROSE_GUARD });
@@ -170,29 +179,60 @@ app.post("/v1/chat/completions", async function(req, res) {
 
     if (stream) {
       res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
       response.data.pipe(res);
+      response.data.on("end", function() { console.log("Stream completed"); });
+      response.data.on("error", function(err) { console.error("Stream error:", err); res.end(); });
       return;
     }
 
     let reply = response.data?.choices?.[0]?.message?.content || "";
-
-    // NUCLEAR REGEX: Remove digits jammed in words (e.g., 'runn5ing' -> 'running')
     reply = reply.replace(/([a-zA-Z])\d+([a-zA-Z])/g, '$1$2');
-    // Remove leading list numbers (e.g., '1. ' at start of lines)
     reply = reply.replace(/^\d+\.\s+/gm, '');
 
+    res.setHeader("Content-Type", "application/json");
     res.json({
       id: response.data?.id || `chatcmpl-${Date.now()}`,
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
       model: body.model || PRIMARY_MODEL,
-      choices: [{ index: 0, message: { role: "assistant", content: reply }, finish_reason: "stop" }],
-      usage: response.data?.usage || { total_tokens: 0 }
+      choices: [{ index: 0, message: { role: "assistant", content: reply || " " }, finish_reason: "stop" }],
+      usage: response.data?.usage || { prompt_tokens: 10, completion_tokens: 50, total_tokens: 60 }
     });
 
+    console.log("Response sent -", reply.length, "chars, model:", currentModel);
+
   } catch (error) {
-    res.status(500).json({ error: { message: error.message } });
+    console.error("ALL ATTEMPTS FAILED:", error.message);
+    if (error.response?.status === 429) {
+      return res.status(429).json({ error: { message: "Rate limit exceeded. Please wait a few minutes.", type: "rate_limit_error", code: 429 } });
+    }
+    res.status(500).json({ error: { message: error.message || "Unknown error occurred" } });
   }
+}
+
+app.post("/v1/chat/completions", handleChatCompletions);
+app.post("/v1/chat/completions/", handleChatCompletions);
+app.post("/chat/completions", handleChatCompletions);
+
+app.post("/", async function(req, res) {
+  recordHit(req);
+  if (req.body && req.body.messages) {
+    return handleChatCompletions(req, res);
+  }
+  res.type("text").send("POST received");
 });
 
-app.listen(PORT, () => console.log(`Proxy active on ${PORT}. V4 Prose Guard: ENABLED.`));
+app.use(function(req, res) {
+  recordHit(req);
+  console.log("404 - Route not found:", req.method, req.path);
+  res.status(404).json({ error: { message: "Route not found", method: req.method, path: req.path } });
+});
+
+app.listen(PORT, function() {
+  console.log("Proxy active on port", PORT);
+  console.log("Primary Model:", PRIMARY_MODEL);
+  console.log("V4 Prose Guard: ENABLED");
+  console.log("API Key:", API_KEY ? "Loaded" : "Missing");
+});
