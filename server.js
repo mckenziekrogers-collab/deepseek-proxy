@@ -20,6 +20,7 @@ const PRIMARY_MODEL = "deepseek-ai/deepseek-v4-flash";
 
 const FALLBACK_MODELS = [
   "deepseek-ai/deepseek-v4-pro",
+  "deepseek-ai/deepseek-v4-flash",
   "deepseek-ai/deepseek-v3.2",
   "deepseek-ai/deepseek-v3.1-terminus"
 ];
