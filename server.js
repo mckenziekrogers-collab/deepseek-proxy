@@ -159,7 +159,7 @@ async function handleChatCompletions(req, res) {
 
     const body = req.body || {};
     let messages = Array.isArray(body.messages) ? body.messages : [];
-    const temperature = 1.1;
+    const temperature = 0.7;
     const max_tokens = Math.min(Math.max(body.max_tokens || 4000, 200), 6000);
     const stream = body.stream || false;
 
