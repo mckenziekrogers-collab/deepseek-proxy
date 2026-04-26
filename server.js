@@ -16,13 +16,13 @@ app.use(express.json({ limit: "100mb" }));
 
 const NIM_API_BASE = "https://integrate.api.nvidia.com/v1";
 const API_KEY = process.env.NIM_API_KEY;
-const PRIMARY_MODEL = "deepseek-ai/deepseek-v4-flash";
+const PRIMARY_MODEL = "deepseek-ai/deepseek-v3.1-terminus";
 
 const FALLBACK_MODELS = [
-  "deepseek-ai/deepseek-v4-pro",
-  "deepseek-ai/deepseek-v4-flash",
   "deepseek-ai/deepseek-v3.2",
-  "deepseek-ai/deepseek-v3.1-terminus"
+  "deepseek-ai/deepseek-v3.1-terminus",
+  "deepseek-ai/deepseek-v4-flash",
+  "deepseek-ai/deepseek-v4-pro"
 ];
 
 const PROSE_GUARD = "### IMPORTANT: You must write exclusively in natural language. Use of numerical digits (0-9) is STRICTLY FORBIDDEN. Do not use lists, numbered steps, or alphanumeric word-splitting. Deliver fluid, immersive narrative prose only.";
