@@ -84,12 +84,46 @@ function trimMessagesDynamic(messages) {
 }
 
 function stripSummaryOpeners(messages) {
-  const patterns = [/^(as |just |after |following |since |because |in response|with |upon)/i, /^(you said|you mentioned|you asked)/i, /^(indeed|certainly|absolutely|understood|i see)/i];
+  const patterns = [
+    /^(as |just |you just |you had |having just |after |following |with |upon |in response|reacting|acknowledging|noting|seeing as|given that|since you|because you)/i,
+    /^(you said|you mentioned|you asked|you told|you explained|you described|you stated)/i,
+    /^(as you|as we|as the|as your|as i)/i,
+    /^(it seems|it appears|it looks like|it sounds like)/i,
+    /^(indeed|certainly|absolutely|of course|understood|i see|i understand|i hear)/i,
+    /^(recap|summary|to summarize|in summary|to recap)/i
+  ];
   return messages.map(msg => {
     if (msg.role !== "assistant" || typeof msg.content !== "string") return msg;
-    const filteredLines = msg.content.split("\n").filter(line => !patterns.some(p => p.test(line.trim())));
+    const filteredLines = msg.content.split("\n").filter(line => {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) return true;
+      return !patterns.some(p => p.test(trimmed));
+    });
     return { role: msg.role, content: filteredLines.join("\n").trim() };
   });
+}
+
+function injectPrefill(messages) {
+  if (messages.length === 0) return messages;
+  const last = messages[messages.length - 1];
+  if (last.role !== "user") return messages;
+
+  const prefills = [
+    "The scene continues.",
+    "A moment passes.",
+    "The air shifts.",
+    "Silence stretches between them.",
+    "Something stirs.",
+    "The world moves on."
+  ];
+
+  const prefill = prefills[Math.floor(Math.random() * prefills.length)];
+  console.log("Injected prefill:", prefill);
+
+  return messages.slice(0, -1).concat([
+    { role: "assistant", content: prefill },
+    last
+  ]);
 }
 
 function truncateMessages(messages) {
@@ -178,10 +212,18 @@ async function handleChatCompletions(req, res) {
       messages[sysIdx].content += " " + PROSE_GUARD;
     }
 
+    const totalChars = JSON.stringify(messages).length;
+    console.log("Received", messages.length, "messages,", totalChars, "chars total");
+
     const cacheKey = getCacheKey(messages);
     const cachedContext = getFromCache(cacheKey);
-    let processedMessages = cachedContext ? cachedContext.concat(messages.slice(-1)) : truncateMessages(stripSummaryOpeners(messages));
+    let processedMessages = cachedContext ? cachedContext.concat(messages.slice(-1)) : injectPrefill(truncateMessages(stripSummaryOpeners(messages)));
     if (!cachedContext) setCache(cacheKey, processedMessages.slice(0, -1));
+
+    const processedChars = JSON.stringify(processedMessages).length;
+    if (processedMessages.length < messages.length) {
+      console.log("Sending", processedMessages.length, "messages,", processedChars, "chars to NVIDIA");
+    }
 
     const response = await makeNvidiaRequest(processedMessages, temperature, max_tokens, stream);
 
