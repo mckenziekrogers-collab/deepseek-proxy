@@ -102,6 +102,17 @@ function stripSummaryOpeners(messages) {
   });
 }
 
+function cleanNumberGlitches(messages) {
+  return messages.map(msg => {
+    if (typeof msg.content !== "string") return msg;
+    let cleaned = msg.content;
+    cleaned = cleaned.replace(/([a-zA-Z])\d+([a-zA-Z])/g, '$1$2');
+    cleaned = cleaned.replace(/([a-zA-Z])\d+\b/g, '$1');
+    cleaned = cleaned.replace(/^\d+\.\s+/gm, '');
+    return { role: msg.role, content: cleaned };
+  });
+}
+
 function injectPrefill(messages) {
   if (messages.length === 0) return messages;
   const last = messages[messages.length - 1];
@@ -216,7 +227,7 @@ async function handleChatCompletions(req, res) {
 
     const cacheKey = getCacheKey(messages);
     const cachedContext = getFromCache(cacheKey);
-    let processedMessages = cachedContext ? cachedContext.concat(messages.slice(-1)) : injectPrefill(truncateMessages(stripSummaryOpeners(messages)));
+    let processedMessages = cachedContext ? cachedContext.concat(messages.slice(-1)) : injectPrefill(cleanNumberGlitches(truncateMessages(stripSummaryOpeners(messages))));
     if (!cachedContext) setCache(cacheKey, processedMessages.slice(0, -1));
 
     const processedChars = JSON.stringify(processedMessages).length;
