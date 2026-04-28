@@ -41,27 +41,6 @@ let lastHit = null;
 let failedAttempts = 0;
 let currentModel = PRIMARY_MODEL;
 
-const contextCache = new Map();
-const CACHE_MAX_SIZE = 50;
-const CACHE_TTL = 1000 * 60 * 10;
-
-function getCacheKey(messages) {
-  if (messages.length < 3) return null;
-  return JSON.stringify(messages.slice(0, -1)).slice(0, 500);
-}
-
-function getFromCache(key) {
-  if (!key) return null;
-  const entry = contextCache.get(key);
-  if (!entry || Date.now() - entry.time > CACHE_TTL) { contextCache.delete(key); return null; }
-  return entry.value;
-}
-
-function setCache(key, value) {
-  if (!key) return;
-  if (contextCache.size >= CACHE_MAX_SIZE) contextCache.delete(contextCache.keys().next().value);
-  contextCache.set(key, { value, time: Date.now() });
-}
 
 function getBackoffDelay(attemptNum) {
   return Math.min(BACKOFF_BASE * Math.pow(2, attemptNum), BACKOFF_MAX) + (Math.random() * 500);
@@ -225,10 +204,7 @@ async function handleChatCompletions(req, res) {
     const totalChars = JSON.stringify(messages).length;
     console.log("Received", messages.length, "messages,", totalChars, "chars total");
 
-    const cacheKey = getCacheKey(messages);
-    const cachedContext = getFromCache(cacheKey);
-    let processedMessages = cachedContext ? cachedContext.concat(messages.slice(-1)) : injectPrefill(cleanNumberGlitches(truncateMessages(stripSummaryOpeners(messages))));
-    if (!cachedContext) setCache(cacheKey, processedMessages.slice(0, -1));
+    let processedMessages = injectPrefill(cleanNumberGlitches(truncateMessages(stripSummaryOpeners(messages))));
 
     const processedChars = JSON.stringify(processedMessages).length;
     if (processedMessages.length < messages.length) {
