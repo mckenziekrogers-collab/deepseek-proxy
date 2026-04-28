@@ -28,10 +28,10 @@ const PROSE_GUARD = "### IMPORTANT: You must write exclusively in natural langua
 
 const ENABLE_SMART_TRUNCATION = true;
 const TRUNCATION_TIERS = {
-  small:  { threshold: 100,      keep: 100, keepFirst: 0  },
-  medium: { threshold: 300,      keep: 150, keepFirst: 10 },
-  large:  { threshold: 1000,     keep: 200, keepFirst: 20 },
-  huge:   { threshold: Infinity, keep: 250, keepFirst: 30 }
+  small:  { threshold: 100,      keep: 80,  keepFirst: 0  },
+  medium: { threshold: 300,      keep: 100, keepFirst: 8  },
+  large:  { threshold: 1000,     keep: 140, keepFirst: 15 },
+  huge:   { threshold: Infinity, keep: 180, keepFirst: 20 }
 };
 
 const BACKOFF_BASE = 1000;
