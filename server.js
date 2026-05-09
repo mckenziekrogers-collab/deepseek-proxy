@@ -145,11 +145,14 @@ app.get("/v1/models", (req, res) => {
   });
 });
 
-async function makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum = 0) {
-  const modelToUse = attemptNum === 0 ? currentModel : FALLBACK_MODELS[attemptNum - 1];
-  if (!modelToUse) throw new Error("All fallback models exhausted");
+const OUTAGE_RETRY_LIMIT = 5;
+const OUTAGE_WAIT = 15000;
+const ALL_MODELS = ["deepseek-ai/deepseek-v4-flash", "deepseek-ai/deepseek-v4-pro"];
 
-  console.log("Attempt", attemptNum + 1, "- Using model", modelToUse);
+async function makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum = 0, outageRetry = 0) {
+  const modelToUse = ALL_MODELS[attemptNum % ALL_MODELS.length];
+
+  console.log("Attempt", attemptNum + 1, "- Using model", modelToUse, outageRetry > 0 ? `(outage retry ${outageRetry}/${OUTAGE_RETRY_LIMIT})` : "");
 
   try {
     const response = await axios.post(`${NIM_API_BASE}/chat/completions`,
@@ -162,21 +165,45 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
       currentModel = modelToUse;
       return response;
     }
+
     if (response.status === 429) {
       console.log("RATE LIMITED (429) - NVIDIA is overwhelmed. Backing off...");
       failedAttempts++;
       const retryAfter = (attemptNum + 1) * 5000;
       await new Promise(r => setTimeout(r, retryAfter));
-      return makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum + 1);
+      return makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum + 1, outageRetry);
     }
-    throw { response };
-  } catch (error) {
-    console.log("Model", modelToUse, "failed:", error.message);
-    if (attemptNum < FALLBACK_MODELS.length) {
+
+    if (response.status === 503 || response.status === 504) {
+      console.log("SERVER OUTAGE (" + response.status + ") - Waiting before retry...");
       failedAttempts++;
-      await new Promise(r => setTimeout(r, getBackoffDelay(attemptNum)));
-      return makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum + 1);
+      if (outageRetry < OUTAGE_RETRY_LIMIT) {
+        await new Promise(r => setTimeout(r, OUTAGE_WAIT));
+        return makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum + 1, outageRetry + 1);
+      }
+      throw { isOutage: true };
     }
+
+    throw { response };
+
+  } catch (error) {
+    if (error.isOutage) throw error;
+    console.log("Model", modelToUse, "failed:", error.message);
+    failedAttempts++;
+
+    // Keep bouncing between models
+    if (attemptNum < ALL_MODELS.length * 2) {
+      await new Promise(r => setTimeout(r, getBackoffDelay(attemptNum)));
+      return makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum + 1, outageRetry);
+    }
+
+    // All models exhausted — wait and retry if outage retries remain
+    if (outageRetry < OUTAGE_RETRY_LIMIT) {
+      console.log("All models failed - waiting", OUTAGE_WAIT / 1000, "seconds before trying again...");
+      await new Promise(r => setTimeout(r, OUTAGE_WAIT));
+      return makeNvidiaRequest(messages, temperature, max_tokens, stream, 0, outageRetry + 1);
+    }
+
     throw error;
   }
 }
@@ -243,6 +270,16 @@ async function handleChatCompletions(req, res) {
     console.error("ALL ATTEMPTS FAILED:", error.message);
     if (error.response?.status === 429) {
       return res.status(429).json({ error: { message: "Rate limit exceeded. Please wait a few minutes.", type: "rate_limit_error", code: 429 } });
+    }
+    if (error.isOutage) {
+      return res.status(200).json({
+        id: `chatcmpl-${Date.now()}`,
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model: PRIMARY_MODEL,
+        choices: [{ index: 0, message: { role: "assistant", content: "NVIDIA servers are currently experiencing an outage. Please wait a moment and try again." }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+      });
     }
     res.status(500).json({ error: { message: error.message || "Unknown error occurred" } });
   }
