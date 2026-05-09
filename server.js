@@ -157,7 +157,7 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
   try {
     const response = await axios.post(`${NIM_API_BASE}/chat/completions`,
       { model: modelToUse, messages, temperature, max_tokens, stream },
-      { headers: { "Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json" }, timeout: 600000, responseType: stream ? "stream" : "json" }
+      { headers: { "Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json" }, timeout: 600000, responseType: stream ? "stream" : "json", validateStatus: function(status) { return true; } }
     );
 
     if (response.status === 200) {
@@ -175,15 +175,21 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
     }
 
     if (response.status === 503 || response.status === 504) {
-      console.log("SERVER OUTAGE (" + response.status + ") - Waiting before retry...");
+      console.log("SERVER OUTAGE (" + response.status + ") on " + modelToUse + " - trying next model...");
       failedAttempts++;
       if (outageRetry < OUTAGE_RETRY_LIMIT) {
-        await new Promise(r => setTimeout(r, OUTAGE_WAIT));
+        await new Promise(r => setTimeout(r, getBackoffDelay(attemptNum)));
         return makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum + 1, outageRetry + 1);
       }
       throw { isOutage: true };
     }
 
+    console.log("Model", modelToUse, "returned status", response.status, "- trying next model...");
+    failedAttempts++;
+    if (attemptNum < ALL_MODELS.length * 2) {
+      await new Promise(r => setTimeout(r, getBackoffDelay(attemptNum)));
+      return makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum + 1, outageRetry);
+    }
     throw { response };
 
   } catch (error) {
