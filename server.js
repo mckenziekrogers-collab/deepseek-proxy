@@ -27,10 +27,10 @@ const PROSE_GUARD = "### IMPORTANT: You must write exclusively in natural langua
 
 const ENABLE_SMART_TRUNCATION = true;
 const TRUNCATION_TIERS = {
-  small:  { threshold: 100,      keep: 80,  keepFirst: 0  },
-  medium: { threshold: 300,      keep: 100, keepFirst: 8  },
-  large:  { threshold: 1000,     keep: 140, keepFirst: 15 },
-  huge:   { threshold: Infinity, keep: 180, keepFirst: 20 }
+  small:  { threshold: 100,      keep: 60,  keepFirst: 0  },
+  medium: { threshold: 300,      keep: 80,  keepFirst: 6  },
+  large:  { threshold: 1000,     keep: 100, keepFirst: 10 },
+  huge:   { threshold: Infinity, keep: 120, keepFirst: 15 }
 };
 
 const BACKOFF_BASE = 1000;
@@ -157,7 +157,9 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
     ? [lastWorkingModel, ...ALL_MODELS.filter(m => m !== lastWorkingModel)]
     : ALL_MODELS;
 
-  const modelToUse = orderedModels[attemptNum % orderedModels.length];
+  // Never retry the same model that just failed - always move to next
+  const modelIndex = Math.min(attemptNum, orderedModels.length - 1);
+  const modelToUse = orderedModels[modelIndex];
 
   console.log("Attempt", attemptNum + 1, "- Using model", modelToUse, outageRetry > 0 ? `(outage retry ${outageRetry}/${OUTAGE_RETRY_LIMIT})` : "");
 
