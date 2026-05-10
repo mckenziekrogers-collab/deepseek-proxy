@@ -149,8 +149,15 @@ const OUTAGE_RETRY_LIMIT = 5;
 const OUTAGE_WAIT = 15000;
 const ALL_MODELS = ["deepseek-ai/deepseek-v4-flash", "deepseek-ai/deepseek-v4-pro"];
 
+let lastWorkingModel = null;
+
 async function makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum = 0, outageRetry = 0) {
-  const modelToUse = ALL_MODELS[attemptNum % ALL_MODELS.length];
+  // If we know a model was working recently, try it first
+  const orderedModels = lastWorkingModel
+    ? [lastWorkingModel, ...ALL_MODELS.filter(m => m !== lastWorkingModel)]
+    : ALL_MODELS;
+
+  const modelToUse = orderedModels[attemptNum % orderedModels.length];
 
   console.log("Attempt", attemptNum + 1, "- Using model", modelToUse, outageRetry > 0 ? `(outage retry ${outageRetry}/${OUTAGE_RETRY_LIMIT})` : "");
 
@@ -163,6 +170,7 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
     if (response.status === 200) {
       failedAttempts = 0;
       currentModel = modelToUse;
+      lastWorkingModel = modelToUse;
       return response;
     }
 
