@@ -259,8 +259,47 @@ async function handleChatCompletions(req, res) {
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
-      response.data.pipe(res);
-      response.data.on("end", function() { console.log("Stream completed"); });
+
+      let buffer = "";
+      let inThinkBlock = false;
+
+      response.data.on("data", (chunk) => {
+        buffer += chunk.toString();
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        lines.forEach(line => {
+          if (!line.startsWith("data: ")) { res.write(line + "\n"); return; }
+          if (line.includes("[DONE]")) { res.write(line + "\n"); return; }
+
+          try {
+            const data = JSON.parse(line.slice(6));
+            let content = data.choices?.[0]?.delta?.content || "";
+
+            // Strip thinking tokens
+            if (content.includes("<think>")) { inThinkBlock = true; }
+            if (inThinkBlock) {
+              if (content.includes("</think>")) {
+                inThinkBlock = false;
+                content = content.split("</think>").pop() || "";
+              } else {
+                return; // Skip this chunk entirely
+              }
+            }
+
+            if (data.choices?.[0]?.delta) {
+              data.choices[0].delta.content = content;
+              delete data.choices[0].delta.reasoning_content;
+            }
+
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+          } catch (e) {
+            res.write(line + "\n");
+          }
+        });
+      });
+
+      response.data.on("end", function() { console.log("Stream completed"); res.end(); });
       response.data.on("error", function(err) { console.error("Stream error:", err); res.end(); });
       return;
     }
