@@ -165,7 +165,7 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
 
   try {
     const response = await axios.post(`${NIM_API_BASE}/chat/completions`,
-      { model: modelToUse, messages, temperature, max_tokens, stream },
+      { model: modelToUse, messages, temperature, max_tokens, stream, chat_template_kwargs: { enable_thinking: true, thinking: true } },
       { headers: { "Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json" }, timeout: 600000, responseType: stream ? "stream" : "json", validateStatus: function(status) { return true; } }
     );
 
