@@ -283,7 +283,9 @@ async function handleChatCompletions(req, res) {
     console.log("Response sent -", reply.length, "chars, model:", currentModel);
 
   } catch (error) {
-    console.error("ALL ATTEMPTS FAILED:", error.message);
+    const errMsg = error.message || (error.response ? `HTTP ${error.response.status}` : "No response from NVIDIA") || "Unknown error";
+    console.error("ALL ATTEMPTS FAILED:", errMsg);
+    console.error("Full error:", JSON.stringify(error.response?.data || error.code || "no details"));
     if (error.response?.status === 429) {
       return res.status(429).json({ error: { message: "Rate limit exceeded. Please wait a few minutes.", type: "rate_limit_error", code: 429 } });
     }
