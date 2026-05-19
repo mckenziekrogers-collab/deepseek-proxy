@@ -55,7 +55,13 @@ function trimMessagesDynamic(messages) {
   return messages.map((msg, i) => {
     if (typeof msg.content !== "string" || msg.role === "system" || i === total - 1) return msg;
     const dist = total - 1 - i;
-    const maxChars = dist <= 2 ? 2000 : dist <= 6 ? 1200 : dist <= 15 ? 600 : dist <= 40 ? 300 : 150;
+    // Much more aggressive trimming on older messages
+    const maxChars = dist <= 2 ? 2000 :
+                     dist <= 6 ? 1000 :
+                     dist <= 15 ? 400 :
+                     dist <= 40 ? 200 :
+                     dist <= 80 ? 100 :
+                     50; // Very old messages get heavily compressed
     return msg.content.length <= maxChars ? msg : { role: msg.role, content: msg.content.slice(0, maxChars) };
   });
 }
@@ -165,7 +171,7 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
 
   try {
     const response = await axios.post(`${NIM_API_BASE}/chat/completions`,
-      { model: modelToUse, messages, temperature, max_tokens, stream, chat_template_kwargs: { enable_thinking: true, thinking: true } },
+      { model: modelToUse, messages, temperature, max_tokens, stream, chat_template_kwargs: { enable_thinking: true, thinking: true }, thinking: { type: "enabled", budget_tokens: 4096 } },
       { headers: { "Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json" }, timeout: 600000, responseType: stream ? "stream" : "json", validateStatus: function(status) { return true; } }
     );
 
