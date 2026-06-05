@@ -36,7 +36,10 @@ const TRUNCATION_TIERS = {
 const BACKOFF_BASE = 1000;
 const BACKOFF_MAX = 16000;
 
-let lastHit = null;
+const pendingRequests = new Map();
+const DEDUP_WINDOW = 3000; // 3 seconds
+
+
 let failedAttempts = 0;
 let currentModel = PRIMARY_MODEL;
 
@@ -108,7 +111,26 @@ function injectPrefill(messages) {
     "The air shifts.",
     "Silence stretches between them.",
     "Something stirs.",
-    "The world moves on."
+    "The world moves on.",
+    "A beat of stillness.",
+    "The tension holds.",
+    "Time moves forward.",
+    "The moment shifts.",
+    "Something changes in the air.",
+    "The quiet deepens.",
+    "A breath passes between them.",
+    "The atmosphere thickens.",
+    "The world settles around them.",
+    "A flicker of movement.",
+    "The silence speaks volumes.",
+    "Everything hangs suspended.",
+    "The next moment arrives.",
+    "Something unspoken passes.",
+    "The scene breathes.",
+    "A heartbeat of silence.",
+    "The world tilts slightly.",
+    "Anticipation lingers.",
+    "The mood shifts subtly."
   ];
 
   const prefill = prefills[Math.floor(Math.random() * prefills.length)];
@@ -120,11 +142,87 @@ function injectPrefill(messages) {
   ]);
 }
 
-function truncateMessages(messages) {
-  if (!ENABLE_SMART_TRUNCATION) return trimMessagesDynamic(messages);
-  const tier = messages.length < 100 ? TRUNCATION_TIERS.small : messages.length < 300 ? TRUNCATION_TIERS.medium : messages.length < 1000 ? TRUNCATION_TIERS.large : TRUNCATION_TIERS.huge;
-  if (messages.length <= tier.keep) return trimMessagesDynamic(messages);
-  const truncated = messages.slice(0, tier.keepFirst).concat(messages.slice(-(tier.keep - tier.keepFirst)));
+async function summarizeOldMessages(oldMessages) {
+  if (oldMessages.length === 0) return null;
+  try {
+    console.log("Summarizing", oldMessages.length, "old messages...");
+    const summaryPrompt = oldMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join("\n");
+    const response = await axios.post(`${NIM_API_BASE}/chat/completions`, {
+      model: "deepseek-ai/deepseek-v4-flash",
+      messages: [
+        {
+          role: "system",
+          content: "You are a story summarizer. Summarize the following roleplay conversation history into a concise but detailed paragraph. Preserve all important plot points, character dynamics, emotional beats, relationship developments, and key events. Write in third person present tense. Be specific about what happened, not vague."
+        },
+        { role: "user", content: summaryPrompt }
+      ],
+      temperature: 0.3,
+      max_tokens: 1000,
+      stream: false,
+      chat_template_kwargs: { enable_thinking: false, thinking: false }
+    }, {
+      headers: { "Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json" },
+      timeout: 60000,
+      validateStatus: function(status) { return true; }
+    });
+
+    if (response.status === 200) {
+      const summary = response.data?.choices?.[0]?.message?.content || "";
+      console.log("Summary generated:", summary.length, "chars");
+      return summary;
+    }
+    console.log("Summary failed with status", response.status, "- skipping summarization");
+    return null;
+  } catch (e) {
+    console.log("Summary error:", e.message, "- skipping summarization");
+    return null;
+  }
+}
+
+let cachedSummary = null;
+let summaryGeneratedAt = 0;
+const SUMMARY_INTERVAL = 100;
+
+async function prepareMessages(messages) {
+  const SUMMARY_THRESHOLD = 80;
+  const tier = messages.length < 100 ? TRUNCATION_TIERS.small :
+               messages.length < 300 ? TRUNCATION_TIERS.medium :
+               messages.length < 1000 ? TRUNCATION_TIERS.large :
+               TRUNCATION_TIERS.huge;
+
+  if (messages.length <= tier.keep) {
+    return trimMessagesDynamic(messages);
+  }
+
+  const firstMessages = tier.keepFirst > 0 ? messages.slice(0, tier.keepFirst) : [];
+  const recentMessages = messages.slice(-(tier.keep - tier.keepFirst));
+  const oldMessages = messages.slice(tier.keepFirst, messages.length - (tier.keep - tier.keepFirst));
+
+  if (oldMessages.length >= 20) {
+    // Only regenerate summary every 100 messages
+    const shouldRegenerateSummary = !cachedSummary || (messages.length - summaryGeneratedAt >= SUMMARY_INTERVAL);
+
+    if (shouldRegenerateSummary) {
+      console.log("Regenerating summary at", messages.length, "messages...");
+      const summary = await summarizeOldMessages(oldMessages);
+      if (summary) {
+        cachedSummary = summary;
+        summaryGeneratedAt = messages.length;
+      }
+    } else {
+      console.log("Using cached summary (next update at", summaryGeneratedAt + SUMMARY_INTERVAL, "messages)");
+    }
+
+    if (cachedSummary) {
+      const summaryMessage = { role: "system", content: `[STORY SO FAR: ${cachedSummary}]` };
+      const combined = firstMessages.concat([summaryMessage], recentMessages);
+      console.log("Using summarized context:", combined.length, "messages");
+      return trimMessagesDynamic(combined);
+    }
+  }
+
+  const truncated = firstMessages.concat(recentMessages);
+  console.log("Truncated from", messages.length, "to", truncated.length, "messages");
   return trimMessagesDynamic(truncated);
 }
 
@@ -242,6 +340,22 @@ async function handleChatCompletions(req, res) {
     const max_tokens = Math.min(Math.max(body.max_tokens || 4000, 200), 8192);
     const stream = body.stream || false;
 
+    // Deduplication - ignore duplicate requests within 3 seconds
+    const dedupKey = JSON.stringify(messages.slice(-2));
+    const now = Date.now();
+    if (pendingRequests.has(dedupKey)) {
+      const pending = pendingRequests.get(dedupKey);
+      if (now - pending.time < DEDUP_WINDOW) {
+        console.log("Duplicate request detected - ignoring");
+        return res.status(429).json({ error: { message: "Duplicate request ignored", type: "duplicate_request" } });
+      }
+    }
+    pendingRequests.set(dedupKey, { time: now });
+    // Clean up old dedup keys
+    for (const [key, val] of pendingRequests.entries()) {
+      if (now - val.time > DEDUP_WINDOW * 2) pendingRequests.delete(key);
+    }
+
     const sysIdx = messages.findIndex(m => m.role === "system");
     if (sysIdx === -1) {
       messages.unshift({ role: "system", content: PROSE_GUARD });
@@ -252,7 +366,7 @@ async function handleChatCompletions(req, res) {
     const totalChars = JSON.stringify(messages).length;
     console.log("Received", messages.length, "messages,", totalChars, "chars total");
 
-    let processedMessages = injectPrefill(cleanNumberGlitches(truncateMessages(stripSummaryOpeners(messages))));
+    const processedMessages = injectPrefill(cleanNumberGlitches(await prepareMessages(stripSummaryOpeners(messages))));
 
     const processedChars = JSON.stringify(processedMessages).length;
     if (processedMessages.length < messages.length) {
