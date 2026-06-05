@@ -18,10 +18,7 @@ const NIM_API_BASE = "https://integrate.api.nvidia.com/v1";
 const API_KEY = process.env.NIM_API_KEY;
 const PRIMARY_MODEL = "deepseek-ai/deepseek-v4-flash";
 
-const FALLBACK_MODELS = [
-  "deepseek-ai/deepseek-v4-pro",
-  "deepseek-ai/deepseek-v4-flash"
-];
+const ALL_MODELS = ["deepseek-ai/deepseek-v4-flash", "deepseek-ai/deepseek-v4-pro"];
 
 const PROSE_GUARD = "### IMPORTANT: You must write exclusively in natural language. Use of numerical digits (0-9) is STRICTLY FORBIDDEN. Do not use lists, numbered steps, or alphanumeric word-splitting. Deliver fluid, immersive narrative prose only.";
 
@@ -35,14 +32,16 @@ const TRUNCATION_TIERS = {
 
 const BACKOFF_BASE = 1000;
 const BACKOFF_MAX = 16000;
+const OUTAGE_RETRY_LIMIT = 5;
+const OUTAGE_WAIT = 15000;
 
-const pendingRequests = new Map();
-const DEDUP_WINDOW = 3000; // 3 seconds
-
-
+let lastHit = null;
 let failedAttempts = 0;
 let currentModel = PRIMARY_MODEL;
+let lastWorkingModel = null;
 
+const pendingRequests = new Map();
+const DEDUP_WINDOW = 3000;
 
 function getBackoffDelay(attemptNum) {
   return Math.min(BACKOFF_BASE * Math.pow(2, attemptNum), BACKOFF_MAX) + (Math.random() * 500);
@@ -58,13 +57,12 @@ function trimMessagesDynamic(messages) {
   return messages.map((msg, i) => {
     if (typeof msg.content !== "string" || msg.role === "system" || i === total - 1) return msg;
     const dist = total - 1 - i;
-    // Much more aggressive trimming on older messages
     const maxChars = dist <= 2 ? 2000 :
                      dist <= 6 ? 1000 :
                      dist <= 15 ? 400 :
                      dist <= 40 ? 200 :
                      dist <= 80 ? 100 :
-                     50; // Very old messages get heavily compressed
+                     50;
     return msg.content.length <= maxChars ? msg : { role: msg.role, content: msg.content.slice(0, maxChars) };
   });
 }
@@ -142,86 +140,11 @@ function injectPrefill(messages) {
   ]);
 }
 
-async function summarizeOldMessages(oldMessages) {
-  if (oldMessages.length === 0) return null;
-  try {
-    console.log("Summarizing", oldMessages.length, "old messages...");
-    const summaryPrompt = oldMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join("\n");
-    const response = await axios.post(`${NIM_API_BASE}/chat/completions`, {
-      model: "deepseek-ai/deepseek-v4-flash",
-      messages: [
-        {
-          role: "system",
-          content: "You are a story summarizer. Summarize the following roleplay conversation history into a concise but detailed paragraph. Preserve all important plot points, character dynamics, emotional beats, relationship developments, and key events. Write in third person present tense. Be specific about what happened, not vague."
-        },
-        { role: "user", content: summaryPrompt }
-      ],
-      temperature: 0.3,
-      max_tokens: 1000,
-      stream: false,
-      chat_template_kwargs: { enable_thinking: false, thinking: false }
-    }, {
-      headers: { "Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json" },
-      timeout: 60000,
-      validateStatus: function(status) { return true; }
-    });
-
-    if (response.status === 200) {
-      const summary = response.data?.choices?.[0]?.message?.content || "";
-      console.log("Summary generated:", summary.length, "chars");
-      return summary;
-    }
-    console.log("Summary failed with status", response.status, "- skipping summarization");
-    return null;
-  } catch (e) {
-    console.log("Summary error:", e.message, "- skipping summarization");
-    return null;
-  }
-}
-
-let cachedSummary = null;
-let summaryGeneratedAt = 0;
-const SUMMARY_INTERVAL = 100;
-
-async function prepareMessages(messages) {
-  const SUMMARY_THRESHOLD = 80;
-  const tier = messages.length < 100 ? TRUNCATION_TIERS.small :
-               messages.length < 300 ? TRUNCATION_TIERS.medium :
-               messages.length < 1000 ? TRUNCATION_TIERS.large :
-               TRUNCATION_TIERS.huge;
-
-  if (messages.length <= tier.keep) {
-    return trimMessagesDynamic(messages);
-  }
-
-  const firstMessages = tier.keepFirst > 0 ? messages.slice(0, tier.keepFirst) : [];
-  const recentMessages = messages.slice(-(tier.keep - tier.keepFirst));
-  const oldMessages = messages.slice(tier.keepFirst, messages.length - (tier.keep - tier.keepFirst));
-
-  if (oldMessages.length >= 20) {
-    // Only regenerate summary every 100 messages
-    const shouldRegenerateSummary = !cachedSummary || (messages.length - summaryGeneratedAt >= SUMMARY_INTERVAL);
-
-    if (shouldRegenerateSummary) {
-      console.log("Regenerating summary at", messages.length, "messages...");
-      const summary = await summarizeOldMessages(oldMessages);
-      if (summary) {
-        cachedSummary = summary;
-        summaryGeneratedAt = messages.length;
-      }
-    } else {
-      console.log("Using cached summary (next update at", summaryGeneratedAt + SUMMARY_INTERVAL, "messages)");
-    }
-
-    if (cachedSummary) {
-      const summaryMessage = { role: "system", content: `[STORY SO FAR: ${cachedSummary}]` };
-      const combined = firstMessages.concat([summaryMessage], recentMessages);
-      console.log("Using summarized context:", combined.length, "messages");
-      return trimMessagesDynamic(combined);
-    }
-  }
-
-  const truncated = firstMessages.concat(recentMessages);
+function truncateMessages(messages) {
+  if (!ENABLE_SMART_TRUNCATION) return trimMessagesDynamic(messages);
+  const tier = messages.length < 100 ? TRUNCATION_TIERS.small : messages.length < 300 ? TRUNCATION_TIERS.medium : messages.length < 1000 ? TRUNCATION_TIERS.large : TRUNCATION_TIERS.huge;
+  if (messages.length <= tier.keep) return trimMessagesDynamic(messages);
+  const truncated = messages.slice(0, tier.keepFirst).concat(messages.slice(-(tier.keep - tier.keepFirst)));
   console.log("Truncated from", messages.length, "to", truncated.length, "messages");
   return trimMessagesDynamic(truncated);
 }
@@ -249,19 +172,11 @@ app.get("/v1/models", (req, res) => {
   });
 });
 
-const OUTAGE_RETRY_LIMIT = 5;
-const OUTAGE_WAIT = 15000;
-const ALL_MODELS = ["deepseek-ai/deepseek-v4-flash", "deepseek-ai/deepseek-v4-pro"];
-
-let lastWorkingModel = null;
-
 async function makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum = 0, outageRetry = 0) {
-  // If we know a model was working recently, try it first
   const orderedModels = lastWorkingModel
     ? [lastWorkingModel, ...ALL_MODELS.filter(m => m !== lastWorkingModel)]
     : ALL_MODELS;
 
-  // Never retry the same model that just failed - always move to next
   const modelIndex = Math.min(attemptNum, orderedModels.length - 1);
   const modelToUse = orderedModels[modelIndex];
 
@@ -311,13 +226,11 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
     console.log("Model", modelToUse, "failed:", error.message);
     failedAttempts++;
 
-    // Keep bouncing between models
     if (attemptNum < ALL_MODELS.length * 2) {
       await new Promise(r => setTimeout(r, getBackoffDelay(attemptNum)));
       return makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum + 1, outageRetry);
     }
 
-    // All models exhausted — wait and retry if outage retries remain
     if (outageRetry < OUTAGE_RETRY_LIMIT) {
       console.log("All models failed - waiting", OUTAGE_WAIT / 1000, "seconds before trying again...");
       await new Promise(r => setTimeout(r, OUTAGE_WAIT));
@@ -340,7 +253,7 @@ async function handleChatCompletions(req, res) {
     const max_tokens = Math.min(Math.max(body.max_tokens || 4000, 200), 8192);
     const stream = body.stream || false;
 
-    // Deduplication - ignore duplicate requests within 3 seconds
+    // Deduplication
     const dedupKey = JSON.stringify(messages.slice(-2));
     const now = Date.now();
     if (pendingRequests.has(dedupKey)) {
@@ -351,7 +264,6 @@ async function handleChatCompletions(req, res) {
       }
     }
     pendingRequests.set(dedupKey, { time: now });
-    // Clean up old dedup keys
     for (const [key, val] of pendingRequests.entries()) {
       if (now - val.time > DEDUP_WINDOW * 2) pendingRequests.delete(key);
     }
@@ -366,7 +278,8 @@ async function handleChatCompletions(req, res) {
     const totalChars = JSON.stringify(messages).length;
     console.log("Received", messages.length, "messages,", totalChars, "chars total");
 
-    const processedMessages = injectPrefill(cleanNumberGlitches(await prepareMessages(stripSummaryOpeners(messages))));
+    let processedMessages = cleanNumberGlitches(truncateMessages(stripSummaryOpeners(messages)));
+    processedMessages = injectPrefill(processedMessages);
 
     const processedChars = JSON.stringify(processedMessages).length;
     if (processedMessages.length < messages.length) {
@@ -396,14 +309,13 @@ async function handleChatCompletions(req, res) {
             const data = JSON.parse(line.slice(6));
             let content = data.choices?.[0]?.delta?.content || "";
 
-            // Strip thinking tokens
             if (content.includes("<think>")) { inThinkBlock = true; }
             if (inThinkBlock) {
               if (content.includes("</think>")) {
                 inThinkBlock = false;
                 content = content.split("</think>").pop() || "";
               } else {
-                return; // Skip this chunk entirely
+                return;
               }
             }
 
@@ -425,8 +337,8 @@ async function handleChatCompletions(req, res) {
     }
 
     let reply = response.data?.choices?.[0]?.message?.content || "";
-    reply = reply.replace(/([a-zA-Z])\d+([a-zA-Z])/g, '$1$2');  // runn5ing -> running
-    reply = reply.replace(/([a-zA-Z])\d+\b/g, '$1');             // ti16 -> ti (trims trailing digits)
+    reply = reply.replace(/([a-zA-Z])\d+([a-zA-Z])/g, '$1$2');
+    reply = reply.replace(/([a-zA-Z])\d+\b/g, '$1');
     reply = reply.replace(/^\d+\.\s+/gm, '');
 
     res.setHeader("Content-Type", "application/json");
