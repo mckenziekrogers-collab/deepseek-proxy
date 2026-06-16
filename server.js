@@ -32,7 +32,7 @@ const TRUNCATION_TIERS = {
 
 const BACKOFF_BASE = 1000;
 const BACKOFF_MAX = 16000;
-const OUTAGE_RETRY_LIMIT = 5;
+const OUTAGE_RETRY_LIMIT = 2;
 const OUTAGE_WAIT = 15000;
 
 let lastHit = null;
@@ -217,7 +217,7 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
 
     console.log("Model", modelToUse, "returned status", response.status, "- trying next model...");
     failedAttempts++;
-    if (attemptNum < ALL_MODELS.length * 2) {
+    if (attemptNum < ALL_MODELS.length) {
       await new Promise(r => setTimeout(r, getBackoffDelay(attemptNum)));
       return makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum + 1, outageRetry);
     }
