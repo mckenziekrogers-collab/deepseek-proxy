@@ -198,7 +198,8 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
     if (response.status === 429) {
       console.log("RATE LIMITED (429) - NVIDIA is overwhelmed. Backing off...");
       failedAttempts++;
-      const retryAfter = (attemptNum + 1) * 5000;
+      const retryAfter = (attemptNum + 1) * 10000; // 10s, 20s, 30s...
+      console.log("Waiting", retryAfter / 1000, "seconds before retry...");
       await new Promise(r => setTimeout(r, retryAfter));
       return makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum + 1, outageRetry);
     }
