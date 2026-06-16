@@ -209,7 +209,8 @@ async function makeNvidiaRequest(messages, temperature, max_tokens, stream, atte
       failedAttempts++;
       if (outageRetry < OUTAGE_RETRY_LIMIT) {
         await new Promise(r => setTimeout(r, getBackoffDelay(attemptNum)));
-        return makeNvidiaRequest(messages, temperature, max_tokens, stream, attemptNum + 1, outageRetry + 1);
+        // Reset attemptNum to 0 so it alternates from the start again
+        return makeNvidiaRequest(messages, temperature, max_tokens, stream, (attemptNum + 1) % orderedModels.length, outageRetry + 1);
       }
       throw { isOutage: true };
     }
