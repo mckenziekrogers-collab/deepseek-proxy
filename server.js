@@ -24,10 +24,10 @@ const PROSE_GUARD = "### IMPORTANT: You must write exclusively in natural langua
 
 const ENABLE_SMART_TRUNCATION = true;
 const TRUNCATION_TIERS = {
-  small:  { threshold: 100,      keep: 60,  keepFirst: 0  },
-  medium: { threshold: 300,      keep: 80,  keepFirst: 6  },
-  large:  { threshold: 1000,     keep: 100, keepFirst: 10 },
-  huge:   { threshold: Infinity, keep: 120, keepFirst: 15 }
+  small:  { threshold: 100,      keep: 40,  keepFirst: 0  },
+  medium: { threshold: 300,      keep: 60,  keepFirst: 4  },
+  large:  { threshold: 1000,     keep: 80,  keepFirst: 8  },
+  huge:   { threshold: Infinity, keep: 100, keepFirst: 10 }
 };
 
 const BACKOFF_BASE = 1000;
